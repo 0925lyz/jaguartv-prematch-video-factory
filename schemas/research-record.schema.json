@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JaguarTV fixture research evidence",
+  "type": "object",
+  "required": ["fixture_id", "retrieved_at", "records", "poster_assets"],
+  "properties": {
+    "fixture_id": {"type": "string", "minLength": 1},
+    "retrieved_at": {"type": "string", "format": "date-time"},
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_url", "platform", "publication_time", "retrieval_time", "source_excerpt", "normalized_summary", "confidence"],
+        "properties": {
+          "source_url": {"type": "string", "format": "uri"},
+          "platform": {"type": "string"},
+          "publication_time": {"type": ["string", "null"]},
+          "retrieval_time": {"type": "string", "format": "date-time"},
+          "source_excerpt": {"type": "string"},
+          "normalized_summary": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    },
+    "poster_assets": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["player_name", "club", "season", "source_url", "license_record", "retrieval_date", "asset_hash", "local_path"],
+        "properties": {
+          "player_name": {"type": "string"},
+          "club": {"type": "string"},
+          "season": {"type": "string"},
+          "source_url": {"type": "string", "format": "uri"},
+          "license_record": {"type": "string", "minLength": 1},
+          "retrieval_date": {"type": "string", "format": "date"},
+          "asset_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "local_path": {"type": "string"}
+        }
+      }
+    }
+  }
+}

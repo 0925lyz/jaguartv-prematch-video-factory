@@ -1,0 +1,64 @@
+asset_id,ownership,type,orientation,role,path
+operation_source,fixed,video,16:9,full real operation reference,assets/fixed/source/operation-reference-full.mp4
+operation_master,fixed,video,9:16,7.9-second reusable middle module,assets/fixed/video/operation-master-7.9s.mp4
+operation_master_omni,fixed,video,9:16,comparison-only Omni master with generated UI,assets/fixed/video/operation-master-omni-tv-7.5s.mp4
+omni_raw_library,fixed,video,9:16,raw generated take with partial approval metadata,assets/fixed/generated-library/omni-flash-ext/2026-08-25/omni-tv-single-take-raw-8s.mp4
+omni_asset_record,fixed,json,n/a,model provenance and approved time ranges,assets/fixed/generated-library/omni-flash-ext/2026-08-25/asset-record.json
+downloader_real_source,fixed,image,horizontal,authoritative Downloader code screen,assets/fixed/screens/source/downloader-real-code-2252960.jpg
+downloader_real_vertical,fixed,image,9:16,complete real UI plus enlarged code and Go region,assets/fixed/screens/adapted-vertical/downloader-real-code-2252960-vertical.png
+jaguartv_real_source,fixed,image,16:9,authoritative JaguarTV interface proof,assets/fixed/screens/source/jaguartv-real-interface.jpg
+jaguartv_real_vertical,fixed,image,9:16,vertical adaptation of real JaguarTV interface,assets/fixed/screens/adapted-vertical/jaguartv-real-interface-vertical.png
+module_omni_room,fixed,video,9:16,approved physical room TV and remote plate,assets/fixed/video/modules/01-omni-living-room-remote-approved-2.0s.mp4
+module_downloader_real,fixed,video,9:16,real Downloader code module,assets/fixed/video/modules/02-downloader-real-code-approved-3.0s.mp4
+module_jaguartv_real,fixed,video,9:16,real JaguarTV proof module,assets/fixed/video/modules/03-jaguartv-real-proof-approved-2.5s.mp4
+operation_master_hybrid,fixed,video,9:16,production 7.5-second hybrid middle master,assets/fixed/video/operation-master-hybrid-real-ui-7.5s.mp4
+logo_primary,replaceable,image,square,post-production logo,assets/replaceable/logo/jaguartv-logo-primary.png
+download_strip,replaceable,image,horizontal,Downloader code banner,assets/replaceable/banners/static/downloader-code-strip-2252960.jpg
+banner_motion_01,replaceable,video,16:9,horizontal animated banner,assets/replaceable/banners/motion/banner-motion-horizontal-01.mp4
+banner_motion_02,replaceable,video,16:9,horizontal animated banner,assets/replaceable/banners/motion/banner-motion-horizontal-02.mp4
+cta_motion_01,replaceable,video,9:16,default animated CTA,assets/replaceable/cta/motion/cta-motion-vertical-01.mp4
+cta_horizontal_01,replaceable,image,16:9,control-room CTA,assets/replaceable/cta/static-horizontal/cta-control-room-01.jpg
+cta_horizontal_02,replaceable,image,16:9,green football CTA,assets/replaceable/cta/static-horizontal/cta-green-football-02.jpg
+cta_horizontal_03,replaceable,image,16:9,stadium gold CTA,assets/replaceable/cta/static-horizontal/cta-stadium-gold-03.jpg
+cta_vertical_01,replaceable,image,9:16,neon stadium CTA,assets/replaceable/cta/static-vertical/cta-neon-stadium-01.jpg
+cta_vertical_02,replaceable,image,9:16,simple green CTA,assets/replaceable/cta/static-vertical/cta-green-simple-02.jpg
+cta_vertical_03,replaceable,image,9:16,control-room CTA,assets/replaceable/cta/static-vertical/cta-control-room-03.jpg
+poster_daily,replaceable,image,variable,required daily match poster,assets/replaceable/poster/
+music_default,replaceable,audio,stereo,cross-platform background track,assets/replaceable/music/edits-12s/05-football-game-43s-bombinsound.m4a
+voice_cta,replaceable,audio,mono,CTA-only Brazilian Portuguese voice,assets/replaceable/voiceover/cta-voice-ptbr.wav
+voice_cta_male,replaceable,audio,mono,energetic pt-BR male system voice,assets/replaceable/voiceover/cta-voice-ptbr-male-energetic.wav
+voice_cta_female,replaceable,audio,mono,trusted pt-BR female system voice,assets/replaceable/voiceover/cta-voice-ptbr-female-trust.wav
+voice_cta_apimart,replaceable,audio,mono,localized pt-BR onyx TTS voice,assets/replaceable/voiceover/cta-voice-ptbr-apimart-onyx-local.wav
+omni_neutral_pov_v3,fixed,video,9:16,approved neutral-screen TV POV plate,assets/fixed/generated-library/omni-flash-ext/2026-08-26-omni-neutral-tv-pov-master-raw-10s.mp4
+omni_neutral_pov_v3_record,fixed,json,n/a,task provenance and approval metadata,assets/fixed/generated-library/omni-flash-ext/2026-08-26-neutral-tv-pov-asset-record.json
+downloader_screen_v3,fixed,image,16:9,single enlarged Downloader code page without Logo,assets/fixed/screens/prepared-16x9-v3/01-downloader-code-single-screen.png
+jaguartv_main_screen_v3,fixed,image,16:9,real main UI with Logo inside screen,assets/fixed/screens/prepared-16x9-v3/02-jaguartv-main-logo-in-screen.png
+jaguartv_epg_screen_v3,fixed,image,16:9,real EPG without left ads and Logo inside screen,assets/fixed/screens/prepared-16x9-v3/03-jaguartv-football-epg-no-ads-logo-in-screen.png
+module_downloader_pov_v3,fixed,video,9:16,3-second real Downloader POV module without Logo,assets/fixed/video/modules-v3/01-downloader-real-pov-no-logo-3.0s.mp4
+module_jaguartv_main_pov_v3,fixed,video,9:16,3-second real JaguarTV main POV module,assets/fixed/video/modules-v3/02-jaguartv-main-real-pov-logo-in-tv-3.0s.mp4
+module_jaguartv_epg_pov_v3,fixed,video,9:16,3-second ad-free EPG POV module,assets/fixed/video/modules-v3/03-jaguartv-football-epg-real-pov-logo-in-tv-3.0s.mp4
+operation_master_pov_default_v3,fixed,video,9:16,6-second Downloader plus JaguarTV default master,assets/fixed/video/operation-master-pov-downloader-main-6.0s.mp4
+operation_master_pov_football_v3,fixed,video,9:16,6-second JaguarTV main plus EPG master,assets/fixed/video/operation-master-pov-main-epg-6.0s.mp4
+omni_stable_operation_v4,fixed,video,9:16,locked Omni room with Downloader to football EPG transition,assets/fixed/generated-library/omni-flash-ext/2026-08-26-omni-stable-downloader-epg-raw-6s.mp4
+omni_stable_operation_v4_record,fixed,json,n/a,task provenance and approval metadata,assets/fixed/generated-library/omni-flash-ext/2026-08-26-omni-stable-downloader-epg-asset-record.json
+downloader_screen_v4,fixed,image,16:9,single enlarged authentic Downloader code page,assets/fixed/screens/prepared-16x9-v4/01-downloader-enlarged-code-2252960.png
+jaguartv_epg_screen_v4,fixed,image,16:9,clean football EPG without left ads,assets/fixed/screens/prepared-16x9-v4/02-football-epg-clean.png
+module_downloader_omni_v4,fixed,video,9:16,stable 3-second Omni Downloader module,assets/fixed/video/modules-v4/01-omni-downloader-enlarged-stable-3.0s.mp4
+module_epg_omni_v4,fixed,video,9:16,stable 3-second Omni football EPG module,assets/fixed/video/modules-v4/02-omni-football-epg-stable-3.0s.mp4
+operation_master_omni_v4,fixed,video,9:16,default 6-second stable Downloader plus EPG master,assets/fixed/video/operation-master-omni-stable-downloader-epg-6.0s.mp4
+omni_match_hook_raw_v5,fixed,video,9:16,Omni motion layer for Real Madrid versus Real Sociedad hook,assets/fixed/generated-library/omni-flash-ext/2026-08-26-omni-match-poster-hook-raw-4s.mp4
+omni_match_hook_record_v5,fixed,json,n/a,Omni poster-hook task provenance,assets/fixed/generated-library/omni-flash-ext/2026-08-26-omni-match-poster-hook-asset-record.json
+module_match_hook_v5,fixed,video,9:16,approved 3-second dynamic match hook with exact overlays,assets/fixed/video/modules-v5/01-omni-match-poster-hook-real-madrid-real-sociedad-3.0s.mp4
+module_google_search_v5,fixed,video,9:16,3-second JaguarTVbrasil Google search proof,assets/fixed/video/modules-v5/03-google-search-jaguartvbrasil-3.0s.mp4
+google_search_source_v5,fixed,video,ultrawide,source screen recording for search proof,assets/fixed/source/google-search-jaguartvbrasil-2026-08-26.mov
+module_full_poster_v6,fixed,video,9:16,3-second complete static match poster with no crop,assets/fixed/video/modules-v6/01-full-poster-real-madrid-real-sociedad-3.0s.mp4
+module_google_search_full_logo_v6,fixed,video,9:16,3-second Google search proof with complete Google logo,assets/fixed/video/modules-v6/02-google-search-jaguartvbrasil-full-logo-3.0s.mp4
+omni_palmeiras_santos_batch_v7,fixed,json,n/a,three compliant Omni stadium backgrounds and failed reference-task provenance,assets/fixed/generated-library/omni-flash-ext/palmeiras-santos-v7/batch-asset-record.json
+poster_palmeiras_santos_cover_v7,replaceable,image,4:5,match-time opening cover,assets/replaceable/poster/2026-08-26/palmeiras-santos-carousel/00-match-time-cover.jpg
+poster_palmeiras_santos_neymar_v7,replaceable,image,4:5,Neymar editorial second poster,assets/replaceable/poster/2026-08-26/palmeiras-santos-carousel/01-neymar-question.jpg
+poster_palmeiras_santos_probability_v7,replaceable,image,4:5,Palmeiras probability second poster,assets/replaceable/poster/2026-08-26/palmeiras-santos-carousel/02-palmeiras-63-percent.jpg
+poster_palmeiras_santos_strikers_v7,replaceable,image,4:5,strikers comparison second poster,assets/replaceable/poster/2026-08-26/palmeiras-santos-carousel/03-strikers-8-vs-8.jpg
+poster_internacional_gremio_20260827,replaceable,image,4:5,Internacional versus Gremio match poster,assets/replaceable/poster/2026-08-27/four-matches/01-internacional-gremio.png
+poster_barcelona_athletic_20260827,replaceable,image,4:5,Barcelona versus Athletic Club match poster,assets/replaceable/poster/2026-08-27/four-matches/02-barcelona-athletic-club.png
+poster_celta_osasuna_20260827,replaceable,image,4:5,Celta Vigo versus Osasuna match poster,assets/replaceable/poster/2026-08-27/four-matches/03-celta-vigo-osasuna.png
+poster_chelsea_luton_20260827,replaceable,image,4:5,Chelsea versus Luton match poster,assets/replaceable/poster/2026-08-27/four-matches/04-chelsea-luton.png

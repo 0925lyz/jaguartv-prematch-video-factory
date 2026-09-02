@@ -1,0 +1,43 @@
+{
+  "timezone": "America/Sao_Paulo",
+  "collector": {
+    "base_url": "http://127.0.0.1:8787/api/v1/fixtures",
+    "api_key_env": "FIXTURE_COLLECTOR_API_KEY",
+    "timeout_seconds": 30
+  },
+  "text": {
+    "provider_id": "deepseek",
+    "primary_model_id": "deepseek-v4-flash",
+    "fallback_model_id": "deepseek-v4-pro"
+  },
+  "image": {
+    "model_id": "gpt-image-2",
+    "primary": {
+      "provider_id": "active-large-model-api",
+      "base_url": "https://crs.whynotm.abrdns.com",
+      "base_url_env": "PRIMARY_IMAGE_BASE_URL",
+      "api_key_env": "PRIMARY_IMAGE_API_KEY",
+      "credential_json": {"path": "~/.codex/auth.json", "field": "OPENAI_API_KEY"}
+    },
+    "fallback": {
+      "provider_id": "apimart",
+      "base_url": "https://api.apimart.ai/v1",
+      "base_url_env": "APIMART_IMAGE_BASE_URL",
+      "api_key_env": "APIMART_API_KEY",
+      "keychain_service": "APIMART_API_KEY"
+    }
+  },
+  "video": {
+    "provider_id": "operator-dreamina-vip",
+    "model_id": "seedance2.0fast_vip",
+    "resolution": "720p",
+    "generation_seconds": 4,
+    "dreamina_command": "dreamina"
+  },
+  "publishing": {
+    "inventory_label": "赛前预测",
+    "dashboard_url_env": "JAGUARTV_DASHBOARD_URL",
+    "upload_token_env": "JAGUARTV_UPLOAD_TOKEN",
+    "dashboard_token_env": "JAGUARTV_DASHBOARD_TOKEN"
+  }
+}
