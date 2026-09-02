@@ -14,6 +14,7 @@ untouched.
 - SHA-256-deduplicated poster, operation-clip, and CTA delivery builder.
 - Tests for timezone, selection rules, and provider/model rejection.
 - Prompt contracts and a research-evidence schema that fail closed on uncertain player assets.
+- Real-player face-off poster background method and text-overlay rules: see [docs/poster-master-prompt.md](docs/poster-master-prompt.md) and [docs/poster-production-rules.md](docs/poster-production-rules.md).
 
 The repository contains no API keys, cookies, tokens, or account-session files. Copy
 `config/prematch.example.json` to the ignored `config/local.json` and provide secrets through the
