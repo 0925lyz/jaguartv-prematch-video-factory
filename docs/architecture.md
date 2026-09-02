@@ -16,8 +16,10 @@ not modify or vendor the separate video-creation-automation repository.
    primary/fallback route and records the route actually used.
 5. Poster jobs fail closed when current licensed player, crest, kit, channel-icon, or logo assets
    are missing. Schedule posters contain at most eight fixtures per page.
-6. Video jobs use the V7 composition contract: 3-second hook, 3-second operation module,
-   3-second main-interface module, and 3-second CTA. Component rotation is deterministic by
+6. Video jobs generate only the poster image and the first 3-second dynamic poster hook.
+   Jimeng may create a 3-4 second raw poster clip, which is trimmed into the hook. The
+   remaining 9 seconds are assembled from existing repository assets: operation module,
+   main-interface module, CTA, music, and voice. Component rotation is deterministic by
    Brasilia date plus fixture ID.
 7. Upload is a separate final gate. Only validated packages are sent to Pending Review under
    `赛前预测`; the pipeline never approves or publishes them.

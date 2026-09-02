@@ -11,6 +11,8 @@ untouched.
 - Provider-safe DeepSeek text routing with a recorded fallback.
 - Independent primary/fallback Image2 configuration.
 - Dreamina/Jimeng VIP plus Seedance V7 video contract.
+- Video generation is scoped to the poster hook only; later operation/interface/CTA/audio
+  sections are assembled from existing approved assets.
 - SHA-256-deduplicated poster, operation-clip, and CTA delivery builder.
 - Tests for timezone, selection rules, and provider/model rejection.
 - Prompt contracts and a research-evidence schema that fail closed on uncertain player assets.

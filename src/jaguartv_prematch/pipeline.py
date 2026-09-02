@@ -196,6 +196,9 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         _check_duration(final, 12.0)
         items.append({
             "task_id": item["task_id"],
+            "generation_scope": "only poster image and first 3-second poster hook are generated; all later segments are reused local assets",
+            "generated_seconds": 3,
+            "reused_seconds": 9,
             "poster": str(poster),
             "master": str(master),
             "hook": str(hook),
@@ -208,7 +211,18 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         })
     captions = _captions(run_dir, items)
     _write_json(phase_dir / "captions.json", captions)
-    manifest = {"ok": True, "status": "PHASE4_COMPLETE", "video_count": len(items), "items": items, "captions": str(phase_dir / "captions.json")}
+    manifest = {
+        "ok": True,
+        "status": "PHASE4_COMPLETE",
+        "video_count": len(items),
+        "generation_policy": {
+            "generated": "poster plus 3-second dynamic hook only",
+            "reused": "operation, interface, CTA, music, and voice assets from repository inventory",
+            "final_seconds": 12,
+        },
+        "items": items,
+        "captions": str(phase_dir / "captions.json"),
+    }
     _write_json(phase_dir / "build-manifest.json", manifest)
     return manifest
 
