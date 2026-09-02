@@ -71,6 +71,32 @@ def test_same_day_component_combinations_are_unique():
     assert len(combinations) == len(set(combinations))
 
 
+def test_middle_slots_use_distinct_operation_assets():
+    pools = {
+        "operation": ["op-a", "op-b"],
+        "interface": ["op-a", "op-b"],
+        "cta": ["cta"],
+        "music": ["music"],
+        "voice": ["voice"],
+    }
+    selected = deterministic_batch_rotation("2026-09-03", ["fixture"], pools)
+    item = selected["fixture"]
+    assert item["operation"] != item["interface"]
+
+
+def test_middle_visual_pairs_rotate_before_audio_only_changes():
+    pools = {
+        "operation": ["op-a", "op-b", "op-c"],
+        "interface": ["op-a", "op-b", "op-c"],
+        "cta": ["cta"],
+        "music": ["music"],
+        "voice": ["voice-a", "voice-b"],
+    }
+    selected = deterministic_batch_rotation("2026-09-03", ["a", "b", "c"], pools)
+    pairs = {(item["operation"], item["interface"]) for item in selected.values()}
+    assert len(pairs) == 3
+
+
 def test_upload_url_rejects_embedded_credentials():
     with pytest.raises(ValueError):
         _validated_base_url("https://user:password@example.com")
@@ -108,6 +134,7 @@ def test_phase3_dry_run_creates_4x5_posters(tmp_path):
     })
     result = run_phase3(config, tmp_path / "run", dry_run=True)
     assert result["poster_count"] == 2
+    assert result["items"][0]["fixed_logo_overlay"]["logo_sha256"]
     from PIL import Image
     with Image.open(result["items"][0]["poster"]) as poster:
         assert poster.size == (1024, 1280)

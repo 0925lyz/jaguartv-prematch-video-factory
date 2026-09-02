@@ -18,9 +18,10 @@ not modify or vendor the separate video-creation-automation repository.
    are missing. Schedule posters contain at most eight fixtures per page.
 6. Video jobs generate only the poster image and the first 3-second dynamic poster hook.
    Jimeng may create a 3-4 second raw poster clip, which is trimmed into the hook. The
-   remaining 9 seconds are assembled from existing repository assets: operation module,
-   main-interface module, CTA, music, and voice. Component rotation is deterministic by
-   Brasilia date plus fixture ID.
+   3-9s middle section is assembled from two distinct operation-class videos, then the
+   9-12s tail uses an existing CTA asset. Music is reused from inventory; CTA voice must
+   come from the reusable APIMart-generated pt-BR voice inventory. Component rotation is
+   deterministic by Brasilia date plus fixture ID.
 7. Upload is a separate final gate. Only validated packages are sent to Pending Review under
    `赛前预测`; the pipeline never approves or publishes them.
 

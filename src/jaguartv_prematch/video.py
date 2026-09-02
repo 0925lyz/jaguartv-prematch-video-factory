@@ -51,12 +51,21 @@ def deterministic_batch_rotation(
     for category in categories:
         if not pools.get(category):
             raise VideoGenerationError(f"Empty component pool: {category}")
-    combinations = list(itertools.product(*(pools[category] for category in categories)))
-    if len(fixture_ids) > len(combinations):
+    middle_pairs = [(a, b) for a in pools["operation"] for b in pools["interface"] if a != b]
+    if not middle_pairs:
+        raise VideoGenerationError("Component pools need at least two distinct operation-class videos")
+    other_combinations = list(itertools.product(pools["cta"], pools["music"], pools["voice"]))
+    if len(fixture_ids) > len(middle_pairs) * len(other_combinations):
         raise VideoGenerationError("Component pools cannot provide unique same-day combinations")
-    offset = int(hashlib.sha256(date_brt.encode()).hexdigest(), 16) % len(combinations)
+    offset = int(hashlib.sha256(date_brt.encode()).hexdigest(), 16)
     return {
-        fixture_id: dict(zip(categories, combinations[(offset + index) % len(combinations)], strict=True))
+        fixture_id: {
+            "operation": middle_pairs[(offset + index) % len(middle_pairs)][0],
+            "interface": middle_pairs[(offset + index) % len(middle_pairs)][1],
+            "cta": other_combinations[((offset // 7) + index) % len(other_combinations)][0],
+            "music": other_combinations[((offset // 7) + index) % len(other_combinations)][1],
+            "voice": other_combinations[((offset // 7) + index) % len(other_combinations)][2],
+        }
         for index, fixture_id in enumerate(fixture_ids)
     }
 

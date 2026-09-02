@@ -152,7 +152,15 @@ def run_phase3(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
             attempts = generate_image2(task["prompt"], poster_path, config.data["image"])
             save_image_route_manifest(phase_dir / "image-routes" / f"{task['id']}.json", attempts)
             route = [item.__dict__ for item in attempts]
-        items.append({"task_id": task["id"], "kind": task["kind"], "prompt": str(prompt_path), "poster": str(poster_path), "image_route": route})
+        logo_overlay = _apply_fixed_logo(poster_path)
+        items.append({
+            "task_id": task["id"],
+            "kind": task["kind"],
+            "prompt": str(prompt_path),
+            "poster": str(poster_path),
+            "fixed_logo_overlay": logo_overlay,
+            "image_route": route,
+        })
     manifest = {"ok": True, "status": "PHASE3_COMPLETE", "poster_count": len(items), "items": items}
     _write_json(phase_dir / "poster-manifest.json", manifest)
     return manifest
@@ -199,11 +207,14 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
             "generation_scope": "only poster image and first 3-second poster hook are generated; all later segments are reused local assets",
             "generated_seconds": 3,
             "reused_seconds": 9,
+            "middle_segment_policy": "3-9s is assembled from operation-class videos only",
+            "audio_policy": "APIMart-generated pt-BR CTA voice inventory only",
             "poster": str(poster),
             "master": str(master),
             "hook": str(hook),
             "final": str(final),
             "cover": str(cover),
+            "cover_source": "full poster master",
             "motion_prompt": str(motion_path),
             "master_info": master_info,
             "components": rotations[item["task_id"]],
@@ -217,7 +228,7 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         "video_count": len(items),
         "generation_policy": {
             "generated": "poster plus 3-second dynamic hook only",
-            "reused": "operation, interface, CTA, music, and voice assets from repository inventory",
+            "reused": "3-9s operation-class videos, CTA, music, and APIMart voice assets from repository inventory",
             "final_seconds": 12,
         },
         "items": items,
@@ -309,6 +320,21 @@ def _make_dry_poster(task: dict[str, str], output: Path) -> None:
     img.save(output)
 
 
+def _apply_fixed_logo(poster: Path) -> dict[str, Any]:
+    logo_path = ROOT / "assets/brand/jaguartv-logo.png"
+    with Image.open(poster) as source:
+        image = ImageOps.exif_transpose(source).convert("RGBA")
+    logo = ImageOps.exif_transpose(Image.open(logo_path)).convert("RGBA")
+    width = max(120, round(image.width * 0.17))
+    height = round(width * logo.height / logo.width)
+    logo = logo.resize((width, height), Image.Resampling.LANCZOS)
+    margin = max(20, round(image.width * 0.025))
+    box = [image.width - width - margin, margin, image.width - margin, margin + height]
+    image.alpha_composite(logo, (box[0], box[1]))
+    image.convert("RGB").save(poster)
+    return {"source": str(logo_path), "box": box, "logo_sha256": _sha256(logo_path), "poster_sha256": _sha256(poster)}
+
+
 def _dry_research(fixture: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": "jaguartv-prematch-research-v1",
@@ -328,19 +354,22 @@ def _dry_research(fixture: dict[str, Any]) -> dict[str, Any]:
 
 
 def _component_pools(root: Path) -> dict[str, list[str]]:
-    operation = sorted(str(path) for path in (root / "assets/video/operation").glob("*.mp4") if "epg" not in path.name.lower())
-    interface = sorted(str(path) for path in (root / "assets/video/operation").glob("*.mp4") if "epg" in path.name.lower())
+    operation = sorted(str(path) for path in (root / "assets/video/operation").glob("*.mp4") if "master" not in path.name.lower())
+    if len(operation) < 2:
+        operation = sorted(str(path) for path in (root / "assets/video/operation").glob("*.mp4"))
     cta = sorted(str(path) for path in (root / "assets/video/cta").glob("**/*") if path.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png"})
     music = sorted(str(path) for path in (root / "assets/audio/music").glob("*") if path.suffix.lower() in {".mp3", ".m4a", ".wav"})
-    voice = sorted(str(path) for path in (root / "assets/audio/voiceover").glob("*.wav"))
-    return {"operation": operation, "interface": interface, "cta": cta, "music": music, "voice": voice}
+    voice = sorted(str(path) for path in (root / "assets/audio/voiceover").glob("*apimart*.wav"))
+    return {"operation": operation, "interface": operation, "cta": cta, "music": music, "voice": voice}
 
 
 def _motion_prompt(item: dict[str, Any], master: Path) -> str:
     return (
         f"Animate this exact 9:16 JaguarTV pre-match master for 4 seconds: {master.name}. "
+        "Keep the poster-cover composition visible as the dominant full-frame subject throughout the first 3 seconds; do not treat it as a single-frame flash. "
         "Preserve all Brazilian Portuguese text, player identity, club kit, crests, channel icons, date, kickoff time, prediction, and the upper-right JaguarTV logo. "
-        "Use restrained stadium lighting, subtle push-in, and no face obstruction."
+        "Make the poster background visibly alive with stadium lights, crowd depth, sparks, cloth movement, and a fierce face-to-face player confrontation when two players are present. "
+        "Keep every logo, face, text block, and score readable and fixed in identity; no face obstruction."
     )
 
 
