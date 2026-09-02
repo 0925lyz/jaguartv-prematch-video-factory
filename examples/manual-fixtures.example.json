@@ -1,0 +1,20 @@
+{
+  "schema_version": "jaguartv-prematch-manual-fixtures-v1",
+  "source_note": "manual_verified_fixture; use only when the collector has no complete unexpired run",
+  "fixtures": [
+    {
+      "fixture_id": "manual-20260906-santos-internacional",
+      "competition": "Campeonato Brasileiro Série A",
+      "home_team": "Santos",
+      "away_team": "Internacional",
+      "schedule_date": "2026-09-06",
+      "kickoff_at_brt": "18:30",
+      "channels": ["Jaguar TV"],
+      "featured": true,
+      "source_url": "manual://operator-verified",
+      "retrieved_at": "2026-09-02T06:30:00-03:00",
+      "source_text": "Manual dry-run fixture for pipeline verification only.",
+      "verified_brazilian_players": ["Neymar"]
+    }
+  ]
+}

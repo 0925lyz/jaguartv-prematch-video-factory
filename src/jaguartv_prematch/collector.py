@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -12,6 +13,10 @@ from .records import Fixture
 
 
 BRASILIA = ZoneInfo("America/Sao_Paulo")
+
+
+class FixtureCollectionError(RuntimeError):
+    pass
 
 
 def tomorrow_brasilia(now: datetime | None = None) -> str:
@@ -32,12 +37,26 @@ def collect_fixtures(
     if api_key:
         headers["X-API-Key"] = api_key
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-        payload = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as error:
+        raise FixtureCollectionError(f"collector returned HTTP {error.code}") from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise FixtureCollectionError(f"collector request failed: {type(error).__name__}") from error
 
     rows = payload.get("fixtures", payload if isinstance(payload, list) else [])
     fixtures = [_normalize_fixture(row) for row in rows]
     return fixtures, payload
+
+
+def load_fixture_file(path: Path) -> tuple[list[Fixture], dict[str, Any]]:
+    payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    rows = payload.get("fixtures", payload if isinstance(payload, list) else [])
+    if not isinstance(rows, list):
+        raise FixtureCollectionError("manual fixture file must contain a fixtures array")
+    fixtures = [_normalize_fixture(row) for row in rows if isinstance(row, dict)]
+    return fixtures, {"manual_fixture_file": str(path), "fixtures": [fixture.to_dict() for fixture in fixtures]}
 
 
 def _normalize_fixture(row: dict[str, Any]) -> Fixture:

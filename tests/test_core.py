@@ -1,9 +1,13 @@
+import json
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from jaguartv_prematch.collector import tomorrow_brasilia
+from jaguartv_prematch.config import FactoryConfig
+from jaguartv_prematch.pipeline import run_phase1, run_phase3
 from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexDeepSeekRouter, ProviderRoutingError
 from jaguartv_prematch.selection import selection_reason
@@ -70,3 +74,40 @@ def test_same_day_component_combinations_are_unique():
 def test_upload_url_rejects_embedded_credentials():
     with pytest.raises(ValueError):
         _validated_base_url("https://user:password@example.com")
+
+
+def test_phase1_uses_manual_fixture_file_when_collector_fails(tmp_path):
+    manual = tmp_path / "fixtures.json"
+    manual.write_text(json.dumps({"fixtures": [fixture(competition="Campeonato Brasileiro Série A", home_team="Santos").to_dict()]}, ensure_ascii=False), encoding="utf-8")
+    config = FactoryConfig(Path("test"), {
+        "collector": {"base_url": "http://127.0.0.1:1/api/v1/fixtures", "timeout_seconds": 1},
+        "text": {"provider_id": "deepseek", "primary_model_id": "deepseek-v4-flash", "fallback_model_id": "deepseek-v4-pro"},
+        "image": {"model_id": "gpt-image-2", "primary": {}, "fallback": {}},
+        "video": {"provider_id": "operator-dreamina-vip", "model_id": "seedance2.0fast_vip"},
+        "publishing": {"inventory_label": "赛前预测"},
+    })
+    result = run_phase1(config, tmp_path / "run", manual)
+    selected = json.loads((tmp_path / "run" / "phase1" / "selected-fixtures.json").read_text(encoding="utf-8"))
+    assert result["source"] == "manual_fixture_file"
+    assert len(selected["fixtures"]) == 1
+
+
+def test_phase3_dry_run_creates_4x5_posters(tmp_path):
+    phase1 = tmp_path / "run" / "phase1"
+    phase1.mkdir(parents=True)
+    phase1.joinpath("selected-fixtures.json").write_text(
+        json.dumps({"fixtures": [{"selection_reason": "target_club", **fixture(home_team="Santos", away_team="Internacional").to_dict()}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    config = FactoryConfig(Path("test"), {
+        "collector": {"base_url": "http://127.0.0.1:1/api/v1/fixtures"},
+        "text": {"provider_id": "deepseek", "primary_model_id": "deepseek-v4-flash", "fallback_model_id": "deepseek-v4-pro"},
+        "image": {"model_id": "gpt-image-2", "size": "1024x1280", "primary": {}, "fallback": {}},
+        "video": {"provider_id": "operator-dreamina-vip", "model_id": "seedance2.0fast_vip"},
+        "publishing": {"inventory_label": "赛前预测"},
+    })
+    result = run_phase3(config, tmp_path / "run", dry_run=True)
+    assert result["poster_count"] == 2
+    from PIL import Image
+    with Image.open(result["items"][0]["poster"]) as poster:
+        assert poster.size == (1024, 1280)

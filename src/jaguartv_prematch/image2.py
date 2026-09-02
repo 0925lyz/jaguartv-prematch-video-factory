@@ -41,7 +41,7 @@ def generate_image2(
                 "model": model_id,
                 "prompt": prompt,
                 "n": 1,
-                "size": "1024x1536",
+                "size": image_config.get("size", "1024x1280"),
             }).encode("utf-8")
             request = urllib.request.Request(
                 endpoint,

@@ -12,6 +12,7 @@
   },
   "image": {
     "model_id": "gpt-image-2",
+    "size": "1024x1280",
     "primary": {
       "provider_id": "active-large-model-api",
       "base_url": "https://crs.whynotm.abrdns.com",

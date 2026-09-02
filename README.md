@@ -36,6 +36,14 @@ jaguartv-prematch preflight --config config/local.json
 jaguartv-prematch collect --config config/local.json --output runs/manual/phase1
 ```
 
+Run the complete workflow. Use `--dry-run` only for local pipeline verification; production mode
+still stops when current research evidence or external integrations are unavailable.
+
+```bash
+jaguartv-prematch run --config config/local.json
+jaguartv-prematch run --config config/local.json --dry-run --fixtures-file examples/manual-fixtures.example.json
+```
+
 Build a media delivery folder by passing only the approved source roots:
 
 ```bash

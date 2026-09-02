@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,18 @@ from .runtime import resolve_command
 
 class VideoGenerationError(RuntimeError):
     pass
+
+
+def video_filenames(poster_path: str | Path, source_seconds: int = 4) -> dict[str, str]:
+    stem = _safe(Path(poster_path).stem)
+    return {
+        "media_stem": stem,
+        "master": f"master-{stem}-1080x1920.png",
+        "raw_video": f"jimeng-{stem}-{source_seconds}s.mp4",
+        "hook": f"hook-{stem}-3s.mp4",
+        "final": f"final-{stem}-12s.mp4",
+        "cover": f"cover-{stem}-1080x1920.jpg",
+    }
 
 
 def deterministic_rotation(date_brt: str, fixture_id: str, pools: dict[str, list[str]]) -> dict[str, str]:
@@ -136,7 +149,9 @@ def compose_v7(
         "--cta", components["cta"], "--music", components["music"],
         "--voice", components["voice"], "--output", str(output),
     ]
-    subprocess.run(command, cwd=repository, check=True, timeout=900)
+    result = subprocess.run(command, cwd=repository, capture_output=True, text=True, check=False, timeout=900)
+    if result.returncode != 0:
+        raise VideoGenerationError(_sanitize(result.stderr or result.stdout or "compose-video failed"))
 
 
 def write_build_manifest(path: Path, payload: dict[str, Any]) -> None:
@@ -161,3 +176,7 @@ def _extract_json(output: str) -> dict[str, Any]:
 
 def _sanitize(message: str) -> str:
     return " | ".join(line.strip() for line in message.splitlines() if line.strip())[-1000:]
+
+
+def _safe(value: str) -> str:
+    return re.sub(r"[\x00-\x1f\x7f/\\:*?\"<>|]+", "-", value).strip(" .-") or "untitled"
