@@ -37,7 +37,7 @@ These are the user's explicit standing rules and take precedence over any confli
 
 - JaguarTV football poster deliverables must be generated with Image2 / `gpt-image-2`. If Image2, the configured relay, or the selected Image2 model is unavailable, invalid, or failing, stop image production and report the error. Do not silently switch image models.
 - Never deliver a non-Image2 fallback poster. Do not replace Image2 with a purely programmatic Pillow/HTML/canvas layout, placeholder graphic, screenshot, template card, or heavily masked rescue composition.
-- Deterministic compositing is allowed only for fidelity-critical overlays such as the exact JaguarTV logo, official crests, final score, date, and short pt-BR labels after an Image2-generated composition passes visual suitability checks.
+- Deterministic compositing is allowed only for fidelity-critical poster layers such as the exact JaguarTV logo, official crests, final score, date, and short pt-BR labels after an Image2-generated composition passes visual suitability checks. The JaguarTV logo is baked into the poster artifact itself, not added again during video compositing.
 - If Image2 introduces readable fake text, fake scoreboards, fake logos, or unacceptable artifacts, use targeted Image2 regeneration/correction within the allowed correction budget. If it still fails, mark the poster as unresolved/failed and deliver the prompts plus the error report instead of forcing a low-quality composite.
 
 ## Post-Match Result Poster Overrides
@@ -149,5 +149,5 @@ Use the `史诗决战 / epic symbolic football` direction selectively for major 
 - Text readable on mobile.
 - Prediction panel has enough meaningful content without becoming dense.
 - Prediction panel is legible at video-thumbnail scale: predicted score and probabilities are the largest lettering in the panel, takeaway is short and smaller; do not pass QA if the panel only reads at full resolution.
-- Exact JaguarTV logo remains undistorted.
+- Exact JaguarTV logo remains undistorted, appears once, and is part of the poster itself.
 - PNG opens, is nonblank, and has the expected 4:5 dimensions.

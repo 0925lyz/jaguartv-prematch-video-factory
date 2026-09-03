@@ -63,11 +63,11 @@ ANTI_FIGURE = (
     "for the two club crests, the team names, the prediction box and supporting type. "
     "Do NOT write the words 'JaguarTV', 'JAGUARTV', 'FIGURA', 'CANAL 554', or any other channel/brand "
     "wordmark anywhere in the artwork as rendered text — the JaguarTV brand logo and every channel logo "
-    "(Prime Video, SporTV, Premiere, Globo, etc.) are added programmatically after generation. "
+    "(Prime Video, SporTV, Premiere, Globo, etc.) are baked into the poster after Image2 generation. "
     "Do NOT invent text labels such as 'CANAL 554', 'JAGUARTV channel', 'JaguarTV channel', "
     "any TV-network wordmark or any channel name — those overlays are added programmatically. "
-    "The only figurative animal allowed anywhere is the JaguarTV brand logo, and it is overlaid "
-    "programmatically in the upper-right corner; the background must not redraw or echo it."
+    "The only figurative animal allowed anywhere is the JaguarTV brand logo, and it is baked into "
+    "the poster in the upper-right corner; the video compositor must not add another copy."
 )
 TEAM_ZH = {
     "Arsenal": "阿森纳",
@@ -220,9 +220,9 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
     pools = _component_pools(ROOT)
     rotations = deterministic_batch_rotation(_run_date(run_dir), [item["task_id"] for item in posters], pools)
     items = []
-    for item in posters:
+    for sequence, item in enumerate(posters, 1):
         poster = Path(item["poster"])
-        names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)))
+        names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)), sequence)
         out = phase_dir / names["media_stem"]
         master = out / names["master"]
         hook = out / names["hook"]
@@ -248,6 +248,7 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         items.append({
             "task_id": item["task_id"],
             "generation_scope": "only poster image and first 3-second poster hook are generated; all later segments are reused local assets",
+            "sequence": sequence,
             "generated_seconds": 3,
             "reused_seconds": 9,
             "middle_segment_policy": "3-9s is assembled from operation-class videos only",
@@ -273,6 +274,7 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
             "generated": "poster plus 3-second dynamic hook only",
             "reused": "3-9s operation-class videos, CTA, music, and APIMart voice assets from repository inventory",
             "final_seconds": 12,
+            "video_filename_rule": "prefix every video base name with 01, 02, 03... in manifest order",
         },
         "items": items,
         "captions": str(phase_dir / "captions.json"),
@@ -583,6 +585,7 @@ def _motion_prompt(item: dict[str, Any], master: Path) -> str:
         f"Animate this exact 9:16 JaguarTV pre-match master for 4 seconds: {master.name}. "
         "Keep the poster-cover composition visible as the dominant full-frame subject throughout the first 3 seconds; do not treat it as a single-frame flash. "
         "Preserve all Brazilian Portuguese text, player identity, club kit, crests, channel icons, date, kickoff time, prediction, and the upper-right JaguarTV logo. "
+        "Do not add a second JaguarTV logo or any new brand wordmark; the only JaguarTV logo is already baked into the poster. "
         "Make the poster background visibly alive with stadium lights, crowd depth, sparks, cloth movement, and a fierce face-to-face player confrontation when two players are present. "
         "Keep every logo, face, text block, and score readable and fixed in identity; no face obstruction."
     )
@@ -620,18 +623,19 @@ def _caption_for(run_dir: Path, item: dict[str, Any], fixtures: list[dict[str, A
     weekday = WEEKDAY_PT[datetime.fromisoformat(date_iso).weekday()]
     date_pt = _date_long_pt(date_iso)
     if item.get("kind") == "schedule" or not _fixture_for(run_dir, item["task_id"]):
-        rows = "\n".join(
-            f"{fx['kickoff_at_brt']} — {fx['home_team']} x {fx['away_team']} ({fx['competition']}) · " + " / ".join(fx.get("channels") or ["Jaguar TV"])
+        rows = "; ".join(
+            f"{fx['home_team']} x {fx['away_team']} ({fx['kickoff_at_brt']})"
             for fx in sorted(fixtures, key=lambda row: str(row.get("kickoff_at_brt", "")))
         )
+        hashtags = ["#futebol", "#brasileirao", "#palpites", "#tvaoVivo", "#jaguartvbrasil"]
         return {
             "task_id": item["task_id"],
             "title": f"Agenda de {weekday} na JaguarTV",
             "description": (
-                f"Agenda de {weekday}, {date_pt} — horários de Brasília:\n{rows}\n"
-                "Palpites no vídeo. Comenta aqui quem você acha que ganha!"
+                f"🗓️ Agenda de {weekday}: {rows}. 7 dias grátis no Jaguar TV, TV ao vivo no Android e TV Box! "
+                f"Baixa no jaguartvbrasil.com 📲 {' '.join(hashtags)}"
             ),
-            "tags": ["JaguarTV", "AgendaDeJogos", "Futebol", "Palpites"],
+            "hashtags": hashtags,
         }
 
     fx = _fixture_for(run_dir, item["task_id"]) or {}
@@ -640,17 +644,36 @@ def _caption_for(run_dir: Path, item: dict[str, Any], fixtures: list[dict[str, A
     competition = str(fx.get("competition") or "")
     score = _predicted_score(run_dir, item["task_id"])
     tactical = _tactical_point(run_dir, item["task_id"])
+    hashtags = _hashtags(home, away, competition)
+    hook = f"🔥 É HOJE! {home} x {away} às {fx.get('kickoff_at_brt')}, {competition}."
     description = (
-        f"{home} x {away} — {competition}. {weekday}, {date_pt}, às {fx.get('kickoff_at_brt')} "
-        f"(Horário de Brasília), ao vivo na {channels}.\n"
-        f"Palpite JaguarTV: {score}.\n{tactical}"
-    )
+        f"{hook} Palpite JaguarTV: {score}. {tactical} "
+        f"Vem ver ao vivo no Jaguar TV 📺 7 dias grátis no jaguartvbrasil.com, Android e TV Box. "
+        f"{' '.join(hashtags)}"
+    ).replace("  ", " ").strip()
     return {
         "task_id": item["task_id"],
         "title": f"Palpite JaguarTV: {home} x {away}",
         "description": description,
-        "tags": ["JaguarTV", "Palpite", "Futebol"] + [name.replace(" ", "") for name in (home, away)],
+        "hashtags": hashtags,
     }
+
+
+def _hashtags(home: str, away: str, competition: str) -> list[str]:
+    tags = [f"#{_tag(home)}", f"#{_tag(away)}", f"#{_tag(competition)}", "#futebol", "#jaguartvbrasil"]
+    unique = []
+    for tag in tags:
+        if tag and tag not in unique:
+            unique.append(tag)
+    while len(unique) < 5:
+        unique.insert(-1, "#palpites")
+    return unique[:4] + ["#jaguartvbrasil"]
+
+
+def _tag(value: str) -> str:
+    value = value.lower()
+    replacements = str.maketrans({"á": "a", "à": "a", "ã": "a", "â": "a", "é": "e", "ê": "e", "í": "i", "ó": "o", "ô": "o", "õ": "o", "ú": "u", "ü": "u", "ç": "c"})
+    return re.sub(r"[^a-z0-9]+", "", value.translate(replacements)) or "futebol"
 
 
 def _predicted_score(run_dir: Path, task_id: str) -> str:

@@ -7,12 +7,12 @@ import pytest
 
 from jaguartv_prematch.collector import tomorrow_brasilia
 from jaguartv_prematch.config import FactoryConfig
-from jaguartv_prematch.pipeline import run_phase1, run_phase3
+from jaguartv_prematch.pipeline import _caption_for, run_phase1, run_phase3
 from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexDeepSeekRouter, ProviderRoutingError
 from jaguartv_prematch.selection import selection_reason
 from jaguartv_prematch.upload import _validated_base_url
-from jaguartv_prematch.video import deterministic_batch_rotation
+from jaguartv_prematch.video import deterministic_batch_rotation, video_filenames
 
 
 def fixture(**overrides):
@@ -95,6 +95,29 @@ def test_middle_visual_pairs_rotate_before_audio_only_changes():
     selected = deterministic_batch_rotation("2026-09-03", ["a", "b", "c"], pools)
     pairs = {(item["operation"], item["interface"]) for item in selected.values()}
     assert len(pairs) == 3
+
+
+def test_video_filenames_use_manifest_sequence_prefix():
+    names = video_filenames("桑托斯_vs_帕尔梅拉斯_260923_海报.png", 4, 2)
+    assert names["media_stem"].startswith("02桑托斯_vs_帕尔梅拉斯_260923_海报")
+    assert names["final"].startswith("final-02桑托斯_vs_帕尔梅拉斯_260923_海报")
+
+
+def test_caption_has_exactly_five_hashtags_with_marketing(tmp_path):
+    run_dir = tmp_path / "run"
+    phase1 = run_dir / "phase1"
+    phase2 = run_dir / "phase2"
+    phase1.mkdir(parents=True)
+    phase2.mkdir(parents=True)
+    fx = fixture(competition="Campeonato Brasileiro Série A", home_team="Santos", away_team="Palmeiras").to_dict()
+    phase1.joinpath("selected-fixtures.json").write_text(json.dumps({"fixtures": [fx]}, ensure_ascii=False), encoding="utf-8")
+    phase2.joinpath("fixture-1_research.json").write_text(json.dumps({"projected_or_inferred": [{"claim": "Editorial prediction: Santos 1 x 2 Palmeiras"}]}, ensure_ascii=False), encoding="utf-8")
+    caption = _caption_for(run_dir, {"task_id": "fixture-1"}, [fx], "2026-09-03")
+    hashtags = caption["hashtags"]
+    assert len(hashtags) == 5
+    assert hashtags[-1] == "#jaguartvbrasil"
+    assert "Jaguar TV" in caption["description"]
+    assert "jaguartvbrasil.com" in caption["description"]
 
 
 def test_upload_url_rejects_embedded_credentials():

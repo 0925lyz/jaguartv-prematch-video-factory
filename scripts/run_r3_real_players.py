@@ -173,7 +173,7 @@ def _motion_prompt(item: dict, master: Path) -> str:
         "3 seconds; do not treat it as a single-frame flash. "
         "Preserve all Brazilian Portuguese text, player identity, club kit, crests, channel icons, date, "
         "kickoff time, prediction, and the upper-right JaguarTV logo. The upper-right JaguarTV logo is the "
-        "ONLY logo present — do NOT add any other logo or wordmark anywhere in the video frame. "
+        "ONLY logo present and is already baked into the poster — do NOT add any other logo or wordmark anywhere in the video frame. "
         "Make the poster background visibly alive with stadium lights, crowd depth, sparks, cloth movement, "
         "and a fierce face-to-face player confrontation when players are present. "
         "Keep every logo, face, text block, and score readable and fixed in identity; no face obstruction."
@@ -269,9 +269,9 @@ def main() -> int:
     rotations = deterministic_batch_rotation(_run_date(RUN_DIR), [item["task_id"] for item in items], pools)
 
     video_items = []
-    for item in items:
+    for sequence, item in enumerate(items, 1):
         poster = Path(item["poster"])
-        names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)))
+        names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)), sequence)
         out = phase4_dir / names["media_stem"]
         master = out / names["master"]
         hook = out / names["hook"]
@@ -292,6 +292,7 @@ def main() -> int:
         _check_duration(final, 12.0)
         video_items.append({
             "task_id": item["task_id"],
+            "sequence": sequence,
             "poster": str(poster),
             "master": str(master),
             "hook": str(hook),

@@ -2,11 +2,12 @@
 
 These rules apply to every task and automation in this repository.
 
-## Text generation
+## Text model routing
 
-- Use `deepseek-v4-flash` through the configured DeepSeek provider.
-- Fall back to `deepseek-v4-pro` through that same provider only after a recorded failure.
-- Validate the selected model before each production run.
+- Use the large model selected for the current execution task by default.
+- A run may explicitly configure any available text model, including hy3, hy4, DeepSeek, or GPT routes.
+- Do not hard-code stale model names such as `gpt-5.5` or `gpt-5.6-sol` in prompts, scripts, configuration, task creation, or automation prompts.
+- Verify an explicitly configured model before treating it as available.
 - Keep `provider_id` and `model_id` as separate fields in records and manifests.
 - Do not place credentials, tokens, cookies, or account-session files in this repository.
 
@@ -14,8 +15,10 @@ These rules apply to every task and automation in this repository.
 
 - Image generation uses the configured active `gpt-image-2` route first and APIMart second.
 - A fallback must be recorded; it must never be silent.
+- The upper-right JaguarTV logo must be baked into the poster itself exactly once. Video compositing must not add a second logo overlay.
 - Video generation uses only the authenticated Dreamina/Jimeng VIP account and configured
   Seedance model.
+- Generate only the opening 3-4 second poster hook. Middle operation clips, CTA, music, and voiceover must come from existing authorized inventory and be stitched into the final video.
 - Text, image, and video provider selections are independent.
 
 ## Production safety

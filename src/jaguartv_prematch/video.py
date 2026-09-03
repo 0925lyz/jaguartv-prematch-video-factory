@@ -39,8 +39,10 @@ def _terminal_reason(payload: dict[str, Any]) -> str:
     return f"status={status} fail_reason={fail}".strip()
 
 
-def video_filenames(poster_path: str | Path, source_seconds: int = 4) -> dict[str, str]:
+def video_filenames(poster_path: str | Path, source_seconds: int = 4, sequence: int | None = None) -> dict[str, str]:
     stem = _safe(Path(poster_path).stem)
+    if sequence is not None:
+        stem = f"{sequence:02d}{stem}"
     return {
         "media_stem": stem,
         "master": f"master-{stem}-1080x1920.png",
