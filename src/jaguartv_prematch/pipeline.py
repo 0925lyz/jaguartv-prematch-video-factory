@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from .collector import FixtureCollectionError, collect_fixtures, load_fixture_file, save_collection, tomorrow_brasilia
 from .config import FactoryConfig
@@ -330,9 +330,57 @@ def _apply_fixed_logo(poster: Path) -> dict[str, Any]:
     logo = logo.resize((width, height), Image.Resampling.LANCZOS)
     margin = max(20, round(image.width * 0.025))
     box = [image.width - width - margin, margin, image.width - margin, margin + height]
+    clear_box = [
+        max(0, image.width - round(width * 2.70) - margin),
+        0,
+        image.width,
+        min(image.height, box[3] + round(height * 0.85)),
+    ]
+    _natural_fill_box(image, clear_box)
     image.alpha_composite(logo, (box[0], box[1]))
     image.convert("RGB").save(poster)
-    return {"source": str(logo_path), "box": box, "logo_sha256": _sha256(logo_path), "poster_sha256": _sha256(poster)}
+    return {
+        "source": str(logo_path),
+        "box": box,
+        "cleared_box": clear_box,
+        "safe_margin_px": margin,
+        "background_fill": "natural_inpaint",
+        "logo_sha256": _sha256(logo_path),
+        "poster_sha256": _sha256(poster),
+    }
+
+
+def _natural_fill_box(image: Image.Image, box: list[int]) -> None:
+    x0, y0, x1, y1 = box
+    width, height = x1 - x0, y1 - y0
+    region = image.crop((x0, y0, x1, y1)).convert("RGB")
+    mask = Image.new("L", (width, height), 0)
+    mask.putdata([
+        255 if value > 178 or (saturation > 72 and value > 58) else 0
+        for _, saturation, value in region.convert("HSV").getdata()
+    ])
+    mask = mask.filter(ImageFilter.MaxFilter(17)).filter(ImageFilter.GaussianBlur(3))
+    if not mask.getbbox():
+        return
+    patch = image.crop((x0, y0, x1, y1)).convert("RGBA")
+    pixels = patch.load()
+    masked = {(idx % width, idx // width) for idx, value in enumerate(mask.getdata()) if value > 36}
+    while masked:
+        fills = []
+        for x, y in masked:
+            neighbours = [
+                pixels[nx, ny]
+                for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1))
+                if 0 <= nx < width and 0 <= ny < height and (nx, ny) not in masked
+            ]
+            if neighbours:
+                fills.append((x, y, tuple(sum(pixel[i] for pixel in neighbours) // len(neighbours) for i in range(4))))
+        if not fills:
+            break
+        for x, y, colour in fills:
+            pixels[x, y] = colour
+            masked.remove((x, y))
+    image.paste(patch, (x0, y0))
 
 
 def _dry_research(fixture: dict[str, Any]) -> dict[str, Any]:

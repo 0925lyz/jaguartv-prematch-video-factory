@@ -90,18 +90,16 @@ def make_vertical_master(poster: Path, output: Path) -> dict[str, Any]:
 
 def make_exact_hook(master: Path, raw_motion: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    logo = Path(__file__).resolve().parents[2] / "assets/brand/jaguartv-logo.png"
     filter_graph = (
         "[0:v]scale=1080:1920,trim=duration=0.12,setpts=PTS-STARTPTS,fps=30[still];"
         "[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
         "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,trim=duration=2.88,"
-        "setpts=PTS-STARTPTS,fps=30[motion];[still][motion]concat=n=2:v=1:a=0[base];"
-        "[2:v]scale=184:-1,format=rgba[logo];[base][logo]overlay=W-w-28:28[outv]"
+        "setpts=PTS-STARTPTS,fps=30[motion];[still][motion]concat=n=2:v=1:a=0[outv]"
     )
     subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-i", str(master),
-            "-i", str(raw_motion), "-i", str(logo), "-filter_complex", filter_graph, "-map", "[outv]", "-t", "3",
+            "-i", str(raw_motion), "-filter_complex", filter_graph, "-map", "[outv]", "-t", "3",
             "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
             "-movflags", "+faststart", str(output),
         ],
