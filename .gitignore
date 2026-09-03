@@ -10,3 +10,4 @@ runs/
 delivery/
 secrets/
 *.log
+.tmp-pytest/

@@ -11,6 +11,22 @@ class CredentialUnavailable(RuntimeError):
     pass
 
 
+def keychain_secret(service: str) -> str:
+    account = os.environ.get("USER") or os.environ.get("LOGNAME") or "jaguar"
+    result = subprocess.run(
+        ["/usr/bin/security", "find-generic-password", "-a", account, "-s", service, "-w"],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    raise CredentialUnavailable(f"credential {service} is unavailable in the macOS Keychain")
+
+
+def env_or_keychain(env_name: str) -> str:
+    value = os.environ.get(env_name, "").strip()
+    return value or keychain_secret(env_name)
+
+
 def resolve_secret(route: dict[str, Any]) -> str:
     env_name = route.get("api_key_env")
     if env_name and os.environ.get(env_name, "").strip():

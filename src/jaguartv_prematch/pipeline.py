@@ -30,6 +30,45 @@ from .video import (
 
 ROOT = Path(__file__).resolve().parents[2]
 MONTHS_PT = ("JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ")
+MONTHS_PT_FULL = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
+TEAM_COLORS = {
+    "Grêmio": "blue, black and white tricolor",
+    "Gremio": "blue, black and white tricolor",
+    "Internacional": "red and white",
+    "Náutico": "red, blue and white",
+    "Botafogo-SP": "black and white",
+    "Flamengo": "red and black",
+    "Palmeiras": "green and white",
+    "Santos": "black and white",
+    "Vasco da Gama": "black and white with a red diagonal sash",
+    "Vitória": "red and black",
+    "Vitoria": "red and black",
+    "Boca Juniors": "blue and yellow",
+    "Vélez Sarsfield": "blue and white",
+    "Mirassol": "yellow and green",
+}
+
+CREST_SAFETY = (
+    "Home team name and crest strictly on the LEFT, away team name and crest strictly on the RIGHT, both correct, "
+    "prominent and unobstructed. Use anonymous footballers only: silhouettes, back views or cropped figures in the "
+    "correct kit colours, never a recognisable real player face, name or shirt number. "
+    "All visible text must be correct Brazilian Portuguese with correct accents. "
+    "No invented or garbled words, no fake scores, no fake logos and no fake crests anywhere in the artwork. "
+    "No betting, odds or gambling content of any kind."
+)
+ANTI_FIGURE = (
+    "Do NOT include any animal figure, animal head, jaguar head, feline face, lion, tiger, "
+    "trophy, cup, ribbon-trophy, mascot figurine, abstract emblem, sports trophy illustration, "
+    "or any figurative centrepiece at all. The centre of the artwork is reserved exclusively "
+    "for the two club crests, the team names, the prediction box and supporting type. "
+    "Do NOT write the words 'JaguarTV', 'JAGUARTV', 'FIGURA', 'CANAL 554', or any other channel/brand "
+    "wordmark anywhere in the artwork as rendered text — the JaguarTV brand logo and every channel logo "
+    "(Prime Video, SporTV, Premiere, Globo, etc.) are added programmatically after generation. "
+    "Do NOT invent text labels such as 'CANAL 554', 'JAGUARTV channel', 'JaguarTV channel', "
+    "any TV-network wordmark or any channel name — those overlays are added programmatically. "
+    "The only figurative animal allowed anywhere is the JaguarTV brand logo, and it is overlaid "
+    "programmatically in the upper-right corner; the background must not redraw or echo it."
+)
 TEAM_ZH = {
     "Arsenal": "阿森纳",
     "Barcelona": "巴塞罗那",
@@ -137,7 +176,7 @@ def run_phase3(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         _write_json(phase_dir / "poster-manifest.json", report)
         return report
 
-    tasks = [_single_prompt_task(item) for item in fixtures]
+    tasks = [_single_prompt_task(item, run_dir) for item in fixtures]
     tasks.append(_schedule_prompt_task(fixtures))
     items = []
     for task in tasks:
@@ -153,12 +192,16 @@ def run_phase3(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
             save_image_route_manifest(phase_dir / "image-routes" / f"{task['id']}.json", attempts)
             route = [item.__dict__ for item in attempts]
         logo_overlay = _apply_fixed_logo(poster_path)
+        channel_overlay: dict[str, Any] | None = None
+        if task["kind"] == "schedule":
+            channel_overlay = _apply_schedule_channel_logos(poster_path, fixtures, ROOT / "assets/channels")
         items.append({
             "task_id": task["id"],
             "kind": task["kind"],
             "prompt": str(prompt_path),
             "poster": str(poster_path),
             "fixed_logo_overlay": logo_overlay,
+            "channel_logo_overlay": channel_overlay,
             "image_route": route,
         })
     manifest = {"ok": True, "status": "PHASE3_COMPLETE", "poster_count": len(items), "items": items}
@@ -276,18 +319,48 @@ def default_run_dir(target_date: str | None = None) -> Path:
     return ROOT / "runs" / (target_date or tomorrow_brasilia()).replace("-", "")
 
 
-def _single_prompt_task(fixture: dict[str, Any]) -> dict[str, str]:
+def _prediction_block(fixture: dict[str, Any], run_dir: Path) -> dict[str, str]:
+    research_path = run_dir / "phase2" / f"{_task_id(fixture)}_research.json"
+    if not research_path.is_file():
+        return {"score": "", "probabilities": "", "tactical": ""}
+    try:
+        evidence = _read_json(research_path)
+    except Exception:
+        return {"score": "", "probabilities": "", "tactical": ""}
+    entries = evidence.get("projected_or_inferred", []) if isinstance(evidence, dict) else []
+    score = ""
+    probabilities = ""
+    tactical = ""
+    for entry in entries:
+        claim = str(entry.get("claim", ""))
+        text = _clean_claim(entry)
+        if not score and "prediction" in claim.lower() and re.search(r"\d\s*x\s*\d", text, re.IGNORECASE):
+            score = text
+        if not probabilities and "win/draw/loss" in claim.lower():
+            probabilities = text
+        if not tactical and "tactical" in claim.lower():
+            tactical = text
+    return {"score": score, "probabilities": probabilities, "tactical": tactical}
+
+
+def _single_prompt_task(fixture: dict[str, Any], run_dir: Path) -> dict[str, str]:
     home, away = str(fixture["home_team"]), str(fixture["away_team"])
     match_date = str(fixture["schedule_date"])
     filename = f"{_zh(home)}_vs_{_zh(away)}_{_yyMMdd(match_date)}_海报.png"
+    prediction = _prediction_block(fixture, run_dir)
+    score_line = f"Predicted score (use exactly, do not invent): {prediction['score']}." if prediction["score"] else "Predicted score: use the team names and a small integer 0-3 on each side, matching the editorial read below."
+    prob_line = f"Probability line (use exactly): {prediction['probabilities']}." if prediction["probabilities"] else "Probability line: Grêmio or Náutico first (depending on the home team), draw middle, away side last, all summing near 100, phrased as Probabilidade."
+    tactical_line = f"Tactical note in one short Portuguese sentence (use exactly): {prediction['tactical']}" if prediction["tactical"] else "Tactical note: one short Portuguese sentence, factual, no betting language."
     prompt = (
         "Create a clean 4:5 JaguarTV pre-match prediction poster. All visible copy must be natural Brazilian Portuguese. "
         "Place the JaguarTV Figure 1 logo fixed in the upper-right corner. Keep all faces, crests, date, kickoff time, "
         f"and broadcast icons unobstructed. Match: {home} vs {away}. Competition: {fixture['competition']}. "
         f"Date: {_date_pt(match_date)}. Kickoff: {fixture['kickoff_at_brt']} Horário de Brasília. "
         f"Broadcast channels: {', '.join(fixture.get('channels') or [])}. "
-        "Use one lower prediction box only, labeled PALPITE, with a short factual prediction and predicted score. "
-        "Use current licensed player photos only when verified by Phase 2 evidence; do not invent transferred players."
+        f"Home kit colours: {_colors(home)}. Away kit colours: {_colors(away)}. "
+        f"Use one lower prediction box only, labeled PALPITE, with these three values in order: {score_line} {prob_line} {tactical_line} "
+        "Text hierarchy inside that box must be predicted score first, then probability, then the tactical note, and it must stay readable at a 512px-wide thumbnail. "
+        f"{CREST_SAFETY} {ANTI_FIGURE}"
     )
     return {"id": _task_id(fixture), "kind": "single", "filename": filename, "prompt": prompt, "title": f"{home} vs {away}"}
 
@@ -298,8 +371,13 @@ def _schedule_prompt_task(fixtures: list[dict[str, Any]]) -> dict[str, str]:
     rows = "; ".join(f"{item['kickoff_at_brt']} {item['home_team']} vs {item['away_team']} PALPITE" for item in dated[:8])
     prompt = (
         "Create a 4:5 JaguarTV schedule poster in Brazilian Portuguese. Put the local match date at the upper center, "
-        "use precise aligned rows, kickoff time and JaguarTV channel icons on the left, home crest/team vs away team/crest, "
-        f"and prefix every prediction with PALPITE. Date: {_date_pt(match_date)} Horário de Brasília. Rows: {rows}."
+        "use precise aligned rows. Each row layout MUST be exactly: time + empty channel-icon strip on the LEFT, "
+        "home crest vs away crest with home strictly on the LEFT and away strictly on the RIGHT in the centre, "
+        "and a clean EMPTY zone on the right edge reserved for the channel logo overlay. "
+        "Do NOT draw any PALPITE wordmark tag, do NOT draw any channel name wordmark, do NOT draw any TV-network logo "
+        "or text label inside the artwork — the channel logos and the PALPITE tag are added programmatically afterwards. "
+        f"Date: {_date_pt(match_date)} Horário de Brasília. Rows: {rows}. "
+        f"Give every row the correct club colours. {CREST_SAFETY} {ANTI_FIGURE}"
     )
     return {"id": f"schedule-{_yyMMdd(match_date)}", "kind": "schedule", "filename": f"{_yyMMdd(match_date)}_赛程海报.png", "prompt": prompt, "title": "Agenda JaguarTV"}
 
@@ -325,7 +403,7 @@ def _apply_fixed_logo(poster: Path) -> dict[str, Any]:
     with Image.open(poster) as source:
         image = ImageOps.exif_transpose(source).convert("RGBA")
     logo = ImageOps.exif_transpose(Image.open(logo_path)).convert("RGBA")
-    width = max(120, round(image.width * 0.17))
+    width = max(96, round(image.width * 0.12))
     height = round(width * logo.height / logo.width)
     logo = logo.resize((width, height), Image.Resampling.LANCZOS)
     margin = max(20, round(image.width * 0.025))
@@ -383,6 +461,95 @@ def _natural_fill_box(image: Image.Image, box: list[int]) -> None:
     image.paste(patch, (x0, y0))
 
 
+# Channel-brand asset lookup: fixture channel names -> file stems in assets/channels/
+_CHANNEL_ALIASES: dict[str, list[str]] = {
+    "PRIME VIDEO": ["Prime_Video"],
+    "PRIMEVIDEO": ["Prime_Video"],
+    "AMAZON PRIME": ["Prime_Video"],
+    "SPORTV / PREMIERE": ["SporTV", "Premiere"],
+    "SPORTV/PREMIERE": ["SporTV", "Premiere"],
+    "PREMIERE": ["Premiere"],
+    "SPORTV": ["SporTV"],
+    "TV GLOBO": ["TV_Globo"],
+    "GLOBO": ["TV_Globo"],
+    "GLOBO/SPORTV/PREMIERE/PRIME VIDEO": ["TV_Globo", "SporTV", "Premiere", "Prime_Video"],
+    "XSPORTS/YOUTUBE": ["XSports", "YouTube"],
+}
+
+
+def _resolve_channel_assets(channel_label: str, channels_root: Path) -> list[Path]:
+    label = channel_label.strip().upper()
+    stems = _CHANNEL_ALIASES.get(label) or _CHANNEL_ALIASES.get(label.split(" / ")[0], [label.split(" / ")[0]])
+    assets: list[Path] = []
+    for stem in stems:
+        for ext in (".png", ".jpg", ".jpeg", ".ico"):
+            candidate = channels_root / f"{stem}{ext}"
+            if candidate.is_file():
+                assets.append(candidate)
+                break
+    return assets
+
+
+def _apply_schedule_channel_logos(
+    poster: Path,
+    fixtures: list[dict[str, Any]],
+    channels_root: Path,
+) -> dict[str, Any]:
+    """Programmatically overlay official channel-brand logos onto the schedule poster.
+
+    For each fixture row the right-side band is first painted with the poster's dark dominant
+    colour to overwrite any AI-generated PALPITE / channel wordmark, then the official channel
+    logos are alpha-composited centred inside that band.
+    """
+    sorted_fixtures = sorted(fixtures, key=lambda item: str(item.get("kickoff_at_brt", "")))
+    with Image.open(poster) as source:
+        image = ImageOps.exif_transpose(source).convert("RGBA")
+    width, height = image.size
+    band_left = round(width * 0.79)
+    band_right = round(width * 0.99)
+    band_top = round(height * 0.30)
+    band_bottom = round(height * 0.92)
+    band_height = band_bottom - band_top
+    row_count = max(1, len(sorted_fixtures))
+    row_h = band_height // row_count
+    mask_color = (10, 18, 30, 235)
+    mask_draw = ImageDraw.Draw(image)
+    placements: list[dict[str, Any]] = []
+    for idx, fixture in enumerate(sorted_fixtures):
+        channels = fixture.get("channels") or ["Jaguar TV"]
+        assets: list[Path] = []
+        for label in channels:
+            assets.extend(_resolve_channel_assets(label, channels_root))
+        if not assets:
+            continue
+        row_y0 = band_top + row_h * idx
+        row_y1 = row_y0 + row_h
+        mask_draw.rectangle([band_left, row_y0, band_right, row_y1], fill=mask_color)
+        target_w_each = round((band_right - band_left) * 0.40)
+        target_w_each = min(target_w_each, 150)
+        gap = round(target_w_each * 0.18)
+        total_w = len(assets) * target_w_each + max(0, len(assets) - 1) * gap
+        centre_x = (band_left + band_right) // 2
+        start_x = centre_x - total_w // 2
+        y_center = (row_y0 + row_y1) // 2
+        for offset, asset_path in enumerate(assets):
+            try:
+                with Image.open(asset_path) as source_icon:
+                    icon = ImageOps.exif_transpose(source_icon).convert("RGBA")
+            except Exception:
+                continue
+            ratio = target_w_each / icon.width
+            new_h = round(icon.height * ratio)
+            icon = icon.resize((target_w_each, new_h), Image.Resampling.LANCZOS)
+            x = start_x + offset * (target_w_each + gap)
+            y = y_center - new_h // 2
+            image.alpha_composite(icon, (x, y))
+            placements.append({"task_id": fixture.get("fixture_id"), "channel": asset_path.stem,
+                               "box": [x, y, x + target_w_each, y + new_h], "sha256": _sha256(asset_path)})
+    image.convert("RGB").save(poster)
+    return {"poster_sha256": _sha256(poster), "channel_logo_overlays": placements}
+
+
 def _dry_research(fixture: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": "jaguartv-prematch-research-v1",
@@ -433,22 +600,160 @@ def _check_duration(path: Path, expected: float) -> None:
         raise RuntimeError(f"{path.name} duration {actual:.2f}s did not match {expected:.2f}s")
 
 
+WEEKDAY_PT = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo")
+
+
 def _captions(run_dir: Path, items: list[dict[str, Any]]) -> dict[str, Any]:
     selected = _read_json(run_dir / "phase1" / "selected-fixtures.json")
+    fixtures = selected.get("fixtures", [])
+    date_iso = _run_date_iso(run_dir)
     return {
         "schema_version": "jaguartv-prematch-captions-v1",
+        "language": "pt-BR",
         "timezone_label": "Horário de Brasília",
-        "items": [{"task_id": item["task_id"], "title": "Palpite do dia na JaguarTV", "description": "Agenda e análise pré-jogo com horários de Brasília.", "tags": ["JaguarTV", "Palpite", "Futebol"]} for item in items],
-        "fixture_count": len(selected.get("fixtures", [])),
+        "items": [_caption_for(run_dir, item, fixtures, date_iso) for item in items],
+        "fixture_count": len(fixtures),
     }
+
+
+def _caption_for(run_dir: Path, item: dict[str, Any], fixtures: list[dict[str, Any]], date_iso: str) -> dict[str, Any]:
+    weekday = WEEKDAY_PT[datetime.fromisoformat(date_iso).weekday()]
+    date_pt = _date_long_pt(date_iso)
+    if item.get("kind") == "schedule" or not _fixture_for(run_dir, item["task_id"]):
+        rows = "\n".join(
+            f"{fx['kickoff_at_brt']} — {fx['home_team']} x {fx['away_team']} ({fx['competition']}) · " + " / ".join(fx.get("channels") or ["Jaguar TV"])
+            for fx in sorted(fixtures, key=lambda row: str(row.get("kickoff_at_brt", "")))
+        )
+        return {
+            "task_id": item["task_id"],
+            "title": f"Agenda de {weekday} na JaguarTV",
+            "description": (
+                f"Agenda de {weekday}, {date_pt} — horários de Brasília:\n{rows}\n"
+                "Palpites no vídeo. Comenta aqui quem você acha que ganha!"
+            ),
+            "tags": ["JaguarTV", "AgendaDeJogos", "Futebol", "Palpites"],
+        }
+
+    fx = _fixture_for(run_dir, item["task_id"]) or {}
+    home, away = str(fx.get("home_team")), str(fx.get("away_team"))
+    channels = " / ".join(fx.get("channels") or ["Jaguar TV"])
+    competition = str(fx.get("competition") or "")
+    score = _predicted_score(run_dir, item["task_id"])
+    tactical = _tactical_point(run_dir, item["task_id"])
+    description = (
+        f"{home} x {away} — {competition}. {weekday}, {date_pt}, às {fx.get('kickoff_at_brt')} "
+        f"(Horário de Brasília), ao vivo na {channels}.\n"
+        f"Palpite JaguarTV: {score}.\n{tactical}"
+    )
+    return {
+        "task_id": item["task_id"],
+        "title": f"Palpite JaguarTV: {home} x {away}",
+        "description": description,
+        "tags": ["JaguarTV", "Palpite", "Futebol"] + [name.replace(" ", "") for name in (home, away)],
+    }
+
+
+def _predicted_score(run_dir: Path, task_id: str) -> str:
+    claim = _projected_claim(run_dir, task_id, 0)
+    found = re.search(r"([A-Za-zÀ-ÿ][\wÀ-ÿ .'-]*?)\s+(\d)\s*[xX]\s*(\d)", claim)
+    if not found:
+        return f"{claim}" if claim else "jogo aberto, decisão nos detalhes"
+    return f"{found.group(1).strip()} {found.group(2)} x {found.group(3)}"
+
+
+def _tactical_point(run_dir: Path, task_id: str) -> str:
+    for entry in _projected_entries(run_dir, task_id):
+        if "tactical" in str(entry.get("claim", "")).lower():
+            return _clean_claim(entry)
+    return ""
+
+
+def _projected_claim(run_dir: Path, task_id: str, index: int) -> str:
+    entries = _projected_entries(run_dir, task_id)
+    return _clean_claim(entries[index]) if index < len(entries) else ""
+
+
+def _projected_entries(run_dir: Path, task_id: str) -> list[dict[str, Any]]:
+    path = run_dir / "phase2" / f"{task_id}_research.json"
+    if not path.is_file():
+        return []
+    try:
+        evidence = _read_json(path)
+    except Exception:
+        return []
+    entries = evidence.get("projected_or_inferred", []) if isinstance(evidence, dict) else []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _clean_claim(entry: dict[str, Any]) -> str:
+    portuguese = str(entry.get("claim_pt", "")).strip()
+    if portuguese:
+        return portuguese
+    claim = str(entry.get("claim", "")).strip()
+    return re.sub(r"^Editorial\s+(prediction|tactical point|win/draw/loss read)\s*:\s*", "", claim, flags=re.IGNORECASE).strip()
 
 
 def _upload_metadata(run_dir: Path, item: dict[str, Any]) -> dict[str, Any]:
+    fx = _fixture_for(run_dir, item.get("task_id", ""))
+    home = str(fx.get("home_team") or "").strip() if fx else ""
+    away = str(fx.get("away_team") or "").strip() if fx else ""
+    if fx:
+        match_name = f"{home} vs {away}" if (home and away) else (item.get("task_id") or "unknown match")
+    else:
+        match_name = f"Agenda JaguarTV {_date_pt(_run_date_iso(run_dir))}"
     return {
         "category": "pre_match_prediction",
+        "match_name": match_name,
+        "match_date": (fx.get("schedule_date") if fx else None) or _run_date_iso(run_dir),
+        "match_time_sao_paulo": _match_time_iso((fx.get("schedule_date") if fx else None) or _run_date_iso(run_dir), (fx.get("kickoff_at_brt") if fx else None) or "00:00"),
+        "competition": (fx.get("competition") or "") if fx else "",
+        "home_team": home,
+        "away_team": away,
+        "channels": (fx.get("channels") or ["Jaguar TV"]) if fx else ["Jaguar TV"],
+        "kickoff_at_brt": (fx.get("kickoff_at_brt") or "") if fx else "",
         "match_info": {"content_category": "赛前预测", "task_id": item["task_id"], "timezone_label": "Horário de Brasília"},
         "metadata": {"artifact_revision": _sha256(Path(item["final"])), "run_dir": str(run_dir)},
     }
+
+
+def _match_time_iso(date: str, kickoff: str) -> str:
+    date = str(date or "").strip()
+    time = str(kickoff or "").strip()
+    if not date or not time:
+        return ""
+    if len(time) == 5:  # HH:MM -> HH:MM:SS
+        time = f"{time}:00"
+    return f"{date}T{time}-03:00"
+
+
+def _run_date_iso(run_dir: Path) -> str:
+    name = run_dir.name
+    if re.fullmatch(r"\d{8}", name):
+        return f"{name[0:4]}-{name[4:6]}-{name[6:8]}"
+    return tomorrow_brasilia()
+
+
+def _fixture_for(run_dir: Path, task_id: str) -> dict[str, Any] | None:
+    """Locate the selected fixture matching a build-manifest task_id."""
+    candidates = (run_dir / "phase1" / "selected-fixtures.json", run_dir / "phase1" / "fixtures.json")
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = _read_json(path)
+        except Exception:
+            continue
+        fixtures = list(data.get("fixtures", []))
+        payload_fixtures = data.get("source_payload", {}).get("fixtures", []) if isinstance(data.get("source_payload"), dict) else []
+        fixtures.extend(payload_fixtures)
+        for fx in fixtures:
+            if fx.get("fixture_id") == task_id or _task_id(fx) == task_id:
+                return fx
+    return None
+
+
+def _colors(team: str) -> str:
+    return TEAM_COLORS.get(team, TEAM_COLORS.get(_zh(team), f"the authentic {team} kit colours"))
 
 
 def _zh(name: str) -> str:
@@ -458,6 +763,11 @@ def _zh(name: str) -> str:
 def _yyMMdd(value: str) -> str:
     parsed = datetime.fromisoformat(value).date()
     return parsed.strftime("%y%m%d")
+
+
+def _date_long_pt(value: str) -> str:
+    parsed = datetime.fromisoformat(value).date()
+    return f"{parsed.day:02d} de {MONTHS_PT_FULL[parsed.month - 1]} de {parsed.year}"
 
 
 def _date_pt(value: str) -> str:

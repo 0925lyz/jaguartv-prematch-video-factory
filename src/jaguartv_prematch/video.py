@@ -5,6 +5,7 @@ import itertools
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,27 @@ from .runtime import resolve_command
 
 class VideoGenerationError(RuntimeError):
     pass
+
+
+def _is_terminal_status(payload: dict[str, Any]) -> bool:
+    status = str(payload.get("gen_status") or payload.get("status") or "").lower()
+    return status in {"success", "succeeded", "finished", "completed", "failed", "fail", "error"}
+
+
+def _payload_video_url(payload: dict[str, Any]) -> str:
+    result = payload.get("result_json") if isinstance(payload.get("result_json"), dict) else payload
+    videos = result.get("videos") if isinstance(result, dict) else None
+    if isinstance(videos, list) and videos:
+        for item in videos:
+            if isinstance(item, dict) and item.get("video_url"):
+                return str(item["video_url"])
+    return ""
+
+
+def _terminal_reason(payload: dict[str, Any]) -> str:
+    status = payload.get("gen_status") or payload.get("status") or "unknown"
+    fail = payload.get("fail_reason") or payload.get("error") or ""
+    return f"status={status} fail_reason={fail}".strip()
 
 
 def video_filenames(poster_path: str | Path, source_seconds: int = 4) -> dict[str, str]:
@@ -73,9 +95,14 @@ def deterministic_batch_rotation(
 def make_vertical_master(poster: Path, output: Path) -> dict[str, Any]:
     with Image.open(poster) as source:
         foreground = ImageOps.exif_transpose(source).convert("RGB")
-    ratio = foreground.width / foreground.height
-    if abs(ratio - 0.8) > 0.02:
-        raise VideoGenerationError(f"Poster is not 4:5: {foreground.size}")
+    # Image2 occasionally returns a non-4:5 portrait (e.g. 2:3 or 9:16). Accept any portrait
+    # source: `contain` below keeps the full poster visible without cropping, the blurred
+    # background fills the 1080x1920 frame. Strictly reject landscape orientations because
+    # they cannot be represented as a 4:5 portrait pre-match poster.
+    if foreground.width >= foreground.height:
+        raise VideoGenerationError(
+            f"Poster orientation is landscape; expected portrait 4:5: {foreground.size}"
+        )
     background = ImageOps.fit(foreground, (1080, 1920), method=Image.Resampling.LANCZOS)
     background = background.filter(ImageFilter.GaussianBlur(35))
     background = Image.blend(background, Image.new("RGB", background.size, (8, 12, 16)), 0.35)
@@ -85,7 +112,12 @@ def make_vertical_master(poster: Path, output: Path) -> dict[str, Any]:
     background.paste(fitted, (x, y))
     output.parent.mkdir(parents=True, exist_ok=True)
     background.save(output, "PNG")
-    return {"canvas": [1080, 1920], "poster_box": [x, y, x + fitted.width, y + fitted.height], "cropped": False}
+    return {
+        "canvas": [1080, 1920],
+        "poster_box": [x, y, x + fitted.width, y + fitted.height],
+        "poster_source_size": list(foreground.size),
+        "cropped": False,
+    }
 
 
 def make_exact_hook(master: Path, raw_motion: Path, output: Path) -> None:
@@ -126,18 +158,24 @@ def submit_dreamina_hook(master: Path, prompt: str, video_config: dict[str, Any]
     return str(task_id)
 
 
-def download_dreamina_result(task_id: str, output_dir: Path, command_name: str = "dreamina") -> Path:
+def download_dreamina_result(task_id: str, output_dir: Path, command_name: str = "dreamina", timeout_seconds: int = 600, poll_interval: int = 10) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [command_name, "query_result", "--submit_id", task_id, "--download_dir", str(output_dir)],
-        capture_output=True, text=True, check=False, timeout=900,
-    )
-    if result.returncode != 0:
-        raise VideoGenerationError(_sanitize(result.stderr or result.stdout))
-    candidates = sorted(output_dir.glob("*.mp4"), key=lambda path: path.stat().st_mtime, reverse=True)
-    if not candidates:
-        raise VideoGenerationError("Dreamina result completed without a downloaded MP4")
-    return candidates[0]
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            [command_name, "query_result", "--submit_id", task_id, "--download_dir", str(output_dir)],
+            capture_output=True, text=True, check=False, timeout=120,
+        )
+        if result.returncode != 0:
+            raise VideoGenerationError(_sanitize(result.stderr or result.stdout))
+        candidates = sorted(output_dir.glob("*.mp4"), key=lambda path: path.stat().st_mtime, reverse=True)
+        if candidates:
+            return candidates[0]
+        payload = _extract_json(result.stdout)
+        if _is_terminal_status(payload) and not _payload_video_url(payload):
+            raise VideoGenerationError(f"Dreamina task {task_id} finished without a downloadable MP4 ({_terminal_reason(payload)})")
+        time.sleep(poll_interval)
+    raise VideoGenerationError(f"Dreamina task {task_id} did not produce an MP4 within {timeout_seconds}s")
 
 
 def compose_v7(

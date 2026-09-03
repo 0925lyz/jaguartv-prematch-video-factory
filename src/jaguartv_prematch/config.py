@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .credentials import CredentialUnavailable, keychain_secret
+
 
 class ConfigurationError(RuntimeError):
     pass
@@ -43,12 +45,19 @@ class FactoryConfig:
             raise ConfigurationError("Publishing inventory label must be exactly 赛前预测")
 
     def env_value(self, section: dict[str, Any], field: str, *, required: bool = True) -> str:
-        env_name = section.get(field)
+        env_name = str(section.get(field))
         if not env_name:
             if required:
                 raise ConfigurationError(f"Missing environment variable name in {field}")
             return ""
-        value = os.environ.get(str(env_name), "")
+        value = os.environ.get(env_name, "").strip()
+        if not value:
+            # Protected credential store: macOS Keychain, service name == env var name.
+            # Secrets are never persisted into config, manifests, filenames or logs.
+            try:
+                value = keychain_secret(env_name)
+            except CredentialUnavailable:
+                value = ""
         if required and not value:
-            raise ConfigurationError(f"Required environment variable is not set: {env_name}")
+            raise ConfigurationError(f"Required credential is not set: {env_name}")
         return value

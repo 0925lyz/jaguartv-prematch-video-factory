@@ -65,7 +65,7 @@ def upload_pending_review(
     verified = _verify_once(url, dashboard_token, upload_id)
     return {
         "upload_id": upload_id,
-        "status": verified["status"],
+        "status": verified.get("status_id") or verified.get("status") or "PENDING_REVIEW",
         "inventory_label": "赛前预测",
         "verified_exactly_once": True,
         "request_id": request_id,
@@ -88,8 +88,21 @@ def _verify_once(base_url: str, dashboard_token: str, upload_id: str) -> dict[st
     matches = [item for item in items if str(item.get("id")) == upload_id]
     if len(matches) != 1:
         raise UploadError(f"Expected exactly one Pending Review record, found {len(matches)}")
-    item = matches[0]
-    if item.get("status") != "PENDING_REVIEW" or item.get("category") != "pre_match_prediction":
+    # The list projection hides status_id/category_id (returns null); fetch the
+    # authoritative detail record to verify status/category.
+    try:
+        detail_resp = requests.get(
+            f"{base_url}/api/originals/{upload_id}",
+            headers={"Authorization": f"Bearer {dashboard_token}"},
+            timeout=60,
+        )
+        detail_resp.raise_for_status()
+        item = detail_resp.json()
+    except requests.RequestException as error:
+        raise UploadError(_sanitized_request_error(error, "Pending Review detail fetch failed")) from error
+    status = item.get("status_id") or item.get("status")
+    category = item.get("category_id") or item.get("category")
+    if status != "PENDING_REVIEW" or category != "pre_match_prediction":
         raise UploadError("Uploaded record is not in Pending Review under 赛前预测")
     return item
 

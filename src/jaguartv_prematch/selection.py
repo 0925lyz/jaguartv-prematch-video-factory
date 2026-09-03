@@ -11,6 +11,7 @@ TARGET_COMPETITIONS = {
     "campeonato brasileiro serie b",
     "brasileirao serie a",
     "brasileirao serie b",
+    "copa do brasil",
 }
 
 TARGET_CLUBS = {
@@ -42,7 +43,7 @@ def selection_reason(fixture: Fixture) -> str | None:
         return "target_competition"
     if teams & TARGET_CLUBS:
         return "target_club"
-    if competition in MAJOR_LEAGUES and fixture.verified_brazilian_players:
+    if fixture.verified_brazilian_players:
         return "verified_current_brazilian_player"
     return None
 

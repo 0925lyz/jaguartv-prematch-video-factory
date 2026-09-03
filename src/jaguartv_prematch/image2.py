@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict
@@ -25,49 +26,57 @@ def generate_image2(
     output: Path,
     image_config: dict[str, Any],
     *,
-    timeout: int = 300,
+    timeout: int = 120,
+    max_retries: int = 4,
+    retry_backoff: float = 8.0,
 ) -> list[ProviderUse]:
-    attempts: list[ProviderUse] = []
-    for index, route_name in enumerate(("primary", "fallback")):
-        route = image_config[route_name]
-        provider_id = route["provider_id"]
-        model_id = image_config["model_id"]
-        started = _now()
-        try:
-            base_url = resolve_base_url(route)
-            api_key = resolve_secret(route)
-            endpoint = base_url if base_url.endswith("/images/generations") else f"{base_url}/v1/images/generations"
-            payload = json.dumps({
-                "model": model_id,
-                "prompt": prompt,
-                "n": 1,
-                "size": image_config.get("size", "1024x1280"),
-            }).encode("utf-8")
-            request = urllib.request.Request(
-                endpoint,
-                data=payload,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                result = json.load(response)
-            image = result["data"][0]
-            output.parent.mkdir(parents=True, exist_ok=True)
-            if image.get("b64_json"):
-                output.write_bytes(base64.b64decode(image["b64_json"]))
-            elif image.get("url"):
-                with urllib.request.urlopen(image["url"], timeout=timeout) as response:
-                    output.write_bytes(response.read())
-            else:
-                raise RuntimeError("Image provider returned no image data")
-            attempts.append(ProviderUse(provider_id, model_id, started, _now(), "ok",
-                                        fallback_from=image_config["primary"]["provider_id"] if index else None))
-            return attempts
-        except (KeyError, OSError, RuntimeError, urllib.error.URLError) as error:
-            attempts.append(ProviderUse(provider_id, model_id, started, _now(), "failed",
-                                        fallback_from=image_config["primary"]["provider_id"] if index else None,
-                                        sanitized_error=_sanitize(error)))
-    raise ImageGenerationError("Both configured Image2 routes failed", attempts)
+    last_error: ImageGenerationError | None = None
+    for attempt in range(max_retries):
+        attempts: list[ProviderUse] = []
+        for index, route_name in enumerate(("primary", "fallback")):
+            route = image_config[route_name]
+            provider_id = route["provider_id"]
+            model_id = image_config["model_id"]
+            started = _now()
+            try:
+                base_url = resolve_base_url(route)
+                api_key = resolve_secret(route)
+                endpoint = base_url if base_url.endswith("/images/generations") else f"{base_url}/v1/images/generations"
+                payload = json.dumps({
+                    "model": model_id,
+                    "prompt": prompt,
+                    "n": 1,
+                    "size": image_config.get("size", "1024x1280"),
+                }).encode("utf-8")
+                request = urllib.request.Request(
+                    endpoint,
+                    data=payload,
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    result = json.load(response)
+                image = _resolve_image(result, base_url, api_key, timeout)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                if image.get("b64_json"):
+                    output.write_bytes(base64.b64decode(image["b64_json"]))
+                elif image.get("url"):
+                    with urllib.request.urlopen(image["url"], timeout=timeout) as response:
+                        output.write_bytes(response.read())
+                else:
+                    raise RuntimeError("Image provider returned no image data")
+                attempts.append(ProviderUse(provider_id, model_id, started, _now(), "ok",
+                                            fallback_from=image_config["primary"]["provider_id"] if index else None))
+                return attempts
+            except (KeyError, OSError, RuntimeError, urllib.error.URLError) as error:
+                attempts.append(ProviderUse(provider_id, model_id, started, _now(), "failed",
+                                            fallback_from=image_config["primary"]["provider_id"] if index else None,
+                                            sanitized_error=_sanitize(error)))
+        last_error = ImageGenerationError("Both configured Image2 routes failed", attempts)
+        if attempt < max_retries - 1:
+            time.sleep(retry_backoff)
+    assert last_error is not None
+    raise last_error
 
 
 def save_image_route_manifest(path: Path, attempts: list[ProviderUse]) -> None:
@@ -81,6 +90,49 @@ def _sanitize(error: Exception) -> str:
     if isinstance(error, KeyError):
         return f"Required configuration or response field missing: {error.args[0]}"
     return str(error)[:500]
+
+
+def _resolve_image(result: Any, base_url: str, api_key: str, timeout: int) -> dict[str, Any]:
+    """Normalize a provider response into an OpenAI-style image descriptor.
+
+    Handles both synchronous OpenAI-compatible responses (data[0].b64_json/url)
+    and async task-based providers such as apimart (data[0].task_id -> poll).
+    """
+    items = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(items, list) or not items:
+        raise RuntimeError("Image provider returned no usable data")
+    first = items[0]
+    if first.get("b64_json") or first.get("url"):
+        return first
+    task_id = first.get("task_id")
+    if task_id:
+        return _poll_apimart(base_url, api_key, task_id, timeout)
+    raise RuntimeError("Image provider returned no image data")
+
+
+def _poll_apimart(base_url: str, api_key: str, task_id: str, timeout: int, max_poll: int = 40, interval: float = 5.0) -> dict[str, Any]:
+    """Poll an apimart async image task until completion and return {url: ...}."""
+    poll_url = f"{base_url}/v1/tasks/{task_id}"
+    last_status = None
+    for _ in range(max_poll):
+        request = urllib.request.Request(
+            poll_url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.load(response)
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        last_status = data.get("status")
+        if data.get("progress", 0) >= 100 or last_status == "completed":
+            images = (data.get("result") or {}).get("images") or []
+            if images and images[0].get("url"):
+                url = images[0]["url"]
+                if isinstance(url, list):
+                    url = url[0]
+                return {"url": url}
+        time.sleep(interval)
+    raise RuntimeError(f"apimart task {task_id} polling timed out (last status: {last_status})")
 
 
 def _now() -> str:
