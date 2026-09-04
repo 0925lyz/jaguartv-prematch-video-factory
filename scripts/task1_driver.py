@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -96,8 +97,29 @@ def _tomorrow_brt_yyyymmdd() -> str:
     return (_now_brt() + timedelta(days=1)).strftime("%Y%m%d")
 
 
-def _detect_batch() -> int:
-    return 1 if _brt_hour() < 14 else 2
+def _summary_complete(run_dir: Path) -> bool:
+    summary = run_dir / "automation-summary.json"
+    if not summary.is_file():
+        return False
+    try:
+        payload = _read_json(summary)
+    except Exception:
+        return False
+    return payload.get("upload") == "PHASE5_COMPLETE"
+
+
+def _completed_batches(date: str) -> list[int]:
+    batches = []
+    for path in sorted((REPO / "runs").glob(f"{date}_batch*")):
+        suffix = path.name.removeprefix(f"{date}_batch")
+        if suffix.isdigit() and _summary_complete(path):
+            batches.append(int(suffix))
+    return batches
+
+
+def _detect_batch(date: str) -> int:
+    completed = _completed_batches(date)
+    return (max(completed) + 1) if completed else 1
 
 
 def _read_json(path: Path):
@@ -141,21 +163,36 @@ def _save_history(hist: dict) -> None:
     _write_json(STYLE_HISTORY, hist)
 
 
-def _select_style(hist: dict, batch: int, batch1_style: str | None) -> dict:
+def _styles_used_for_date(date: str) -> list[str]:
+    used = []
+    for path in sorted((REPO / "runs").glob(f"{date}_batch*/phase3/style-selection.json")):
+        try:
+            style = _read_json(path).get("selected_style")
+        except Exception:
+            style = None
+        if style and style not in used:
+            used.append(str(style))
+    return used
+
+
+def _select_style(hist: dict, batch: int, date: str) -> dict:
     pool = hist.get("pool", [])
     recent = hist.get("recent_styles", [])
-    candidates = [s for s in pool if s not in recent]
-    if batch == 2 and batch1_style:
-        candidates = [s for s in candidates if s != batch1_style]
+    used_today = _styles_used_for_date(date)
+    candidates = [s for s in pool if s not in used_today and s not in recent]
     if not candidates:
-        candidates = [s for s in pool if s != (batch1_style or (recent[-1] if recent else None))]
+        candidates = [s for s in pool if s not in used_today]
     if not candidates:
-        candidates = list(pool)
-    seed = int(hashlib.sha256(f"{batch}:{','.join(pool)}".encode()).hexdigest(), 16)
+        raise RuntimeError(
+            f"no unused poster style remains for {date}: used={used_today}; "
+            "extend prematch style pool before producing another differentiated batch"
+        )
+    seed = int(hashlib.sha256(f"{date}:batch{batch}:{','.join(pool)}".encode()).hexdigest(), 16)
     chosen = candidates[seed % len(candidates)]
     return {
         "eligible_styles": candidates,
         "excluded_recent_styles": recent,
+        "excluded_same_day_styles": used_today,
         "selected_style": chosen,
         "selection_seed": seed,
     }
@@ -409,36 +446,62 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
     return manifest
 
 
+def _caption_rng(run_dir: Path, batch: int, task_id: str) -> random.Random:
+    return random.Random(hashlib.sha256(f"{run_dir.name}:batch{batch}:{task_id}:captions".encode()).hexdigest())
+
+
+def _caption_choice(run_dir: Path, batch: int, task_id: str, values: list[str]) -> str:
+    return values[_caption_rng(run_dir, batch, task_id).randrange(len(values))]
+
+
 def _captions_for_batch(run_dir: Path, items: list[dict], batch: int) -> dict:
     selected = _read_json(run_dir / "phase1" / "selected-fixtures.json")
     fixtures = selected.get("fixtures", [])
     date_iso = _run_date_iso(run_dir)
     weekday = WEEKDAY_PT[datetime.fromisoformat(date_iso).weekday()]
-    date_pt = _date_long_pt(date_iso)
     out_items = []
+    schedule_templates = [
+        "🗓️ Agenda de {weekday}: {rows}. 7 dias grátis no Jaguar TV, TV ao vivo no Android e TV Box. Baixa no jaguartvbrasil.com 📲 {hashtags}",
+        "📺 Guia JaguarTV de {weekday}: {rows}. Escolhe teu jogo, ativa os 7 dias grátis e assiste no Android ou TV Box em jaguartvbrasil.com. {hashtags}",
+        "🔥 Programação pronta para {weekday}: {rows}. Tudo no Jaguar TV, com 7 dias grátis, app Android e TV Box. jaguartvbrasil.com {hashtags}",
+        "⚽ Cola na agenda de {weekday}: {rows}. Pré-jogo, bola rolando e TV ao vivo no Jaguar TV. Teste grátis por 7 dias em jaguartvbrasil.com. {hashtags}",
+    ]
+    match_templates = [
+        "🔥 É HOJE! {home} x {away} às {kickoff}, {competition}. Palpite JaguarTV: {score}. {tactical} Vem ver ao vivo no Jaguar TV 📺 7 dias grátis no jaguartvbrasil.com, Android e TV Box. {hashtags}",
+        "⚡ Tá chegando! {home} x {away} entra em campo às {kickoff} por {competition}. Meu palpite: {score}. {tactical} Assiste no Jaguar TV: 7 dias grátis em jaguartvbrasil.com, Android e TV Box. {hashtags}",
+        "👀 Jogo com cara de tensão: {home} x {away}, {kickoff}, {competition}. Palpite JaguarTV: {score}. {tactical} Acompanha ao vivo no Jaguar TV, com 7 dias grátis no jaguartvbrasil.com. {hashtags}",
+        "🚨 Anota esse confronto: {home} x {away} às {kickoff}, {competition}. Placar projetado: {score}. {tactical} Jaguar TV no Android e TV Box, teste grátis por 7 dias em jaguartvbrasil.com. {hashtags}",
+        "🎯 Pré-jogo JaguarTV: {home} x {away}, {kickoff}, {competition}. Palpite do dia: {score}. {tactical} Quer ver ao vivo? Jaguar TV tem 7 dias grátis em jaguartvbrasil.com. {hashtags}",
+        "📌 Fica de olho: {home} x {away} às {kickoff}, {competition}. Leitura JaguarTV: {score}. {tactical} Baixa o Jaguar TV e testa 7 dias grátis no Android ou TV Box: jaguartvbrasil.com. {hashtags}",
+    ]
     for item in items:
-        fx = _fixture_for(run_dir, item["task_id"]) or {}
+        task_id = str(item["task_id"])
+        fx = _fixture_for(run_dir, task_id) or {}
         if item.get("kind") == "schedule" or not fx:
             rows = "; ".join(f"{f['home_team']} x {f['away_team']} ({f['kickoff_at_brt']})"
                              for f in sorted(fixtures, key=lambda r: str(r.get("kickoff_at_brt", ""))))
             hashtags = ["#futebol", "#brasileirao", "#palpites", "#tvaoVivo", "#jaguartvbrasil"]
-            out_items.append({"task_id": item["task_id"], "title": f"Agenda de {weekday} na JaguarTV",
-                              "description": f"🗓️ Agenda de {weekday}: {rows}. 7 dias grátis no Jaguar TV, "
-                              f"TV ao vivo no Android e TV Box! Baixa no jaguartvbrasil.com 📲 {' '.join(hashtags)}",
+            template = _caption_choice(run_dir, batch, task_id, schedule_templates)
+            out_items.append({"task_id": task_id, "title": f"Agenda de {weekday} na JaguarTV",
+                              "description": template.format(weekday=weekday, rows=rows, hashtags=" ".join(hashtags)),
                               "hashtags": hashtags})
             continue
         home, away = str(fx.get("home_team")), str(fx.get("away_team"))
-        channels = " / ".join(fx.get("channels") or ["Jaguar TV"])
         competition = str(fx.get("competition") or "")
-        score = _predicted_score(run_dir, item["task_id"])
-        tactical = _tactical_point(run_dir, item["task_id"])
+        score = _predicted_score(run_dir, task_id)
+        tactical = _tactical_point(run_dir, task_id)
         hashtags = _hashtags(home, away, competition)
-        opener = "🔥 É HOJE!" if batch == 1 else "⚡ Tá chegando!"
-        hook = f"{opener} {home} x {away} às {fx.get('kickoff_at_brt')}, {competition}."
-        description = (f"{hook} Palpite JaguarTV: {score}. {tactical} "
-                       f"Vem ver ao vivo no Jaguar TV 📺 7 dias grátis no jaguartvbrasil.com, Android e TV Box. "
-                       f"{' '.join(hashtags)}").replace("  ", " ").strip()
-        out_items.append({"task_id": item["task_id"], "title": f"Palpite JaguarTV: {home} x {away}",
+        template = _caption_choice(run_dir, batch, task_id, match_templates)
+        description = template.format(
+            home=home,
+            away=away,
+            kickoff=fx.get("kickoff_at_brt"),
+            competition=competition,
+            score=score,
+            tactical=tactical,
+            hashtags=" ".join(hashtags),
+        ).replace("  ", " ").strip()
+        out_items.append({"task_id": task_id, "title": f"Palpite JaguarTV: {home} x {away}",
                           "description": description, "hashtags": hashtags})
     return {"schema_version": "jaguartv-prematch-captions-v1", "language": "pt-BR",
             "timezone_label": "Horário de Brasília", "batch": batch, "items": out_items,
@@ -617,7 +680,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", type=Path, default=REPO)
     ap.add_argument("--config", type=Path, default=REPO / "config" / "local.json")
-    ap.add_argument("--batch", choices=["auto", "1", "2"], default="auto")
+    ap.add_argument("--batch", default="auto", help="auto or a positive batch number")
     ap.add_argument("--date", help="YYYYMMDD target (default: tomorrow BRT)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--research-dir", type=Path, default=None)
@@ -628,8 +691,16 @@ def main() -> int:
                     help="skip phases 1-5; re-send the existing phase4 video+caption to Lark (validation)")
     args = ap.parse_args()
 
-    batch = int(args.batch) if args.batch != "auto" else _detect_batch()
     date = args.date or _tomorrow_brt_yyyymmdd()
+    if args.batch == "auto":
+        batch = _detect_batch(date)
+    else:
+        try:
+            batch = int(args.batch)
+        except ValueError as exc:
+            raise RuntimeError(f"invalid --batch value: {args.batch}; expected auto or a positive integer") from exc
+        if batch < 1:
+            raise RuntimeError(f"invalid --batch value: {args.batch}; expected auto or a positive integer")
     run_dir = REPO / "runs" / f"{date}_batch{batch}"
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"[info] batch={batch} date={date} run_dir={run_dir} dry_run={args.dry_run}", flush=True)
@@ -648,29 +719,25 @@ def main() -> int:
 
     config = FactoryConfig.load(args.config)
 
-    # 1-2. collect + research (identical/daily-reusable). Spec: steps 1-2 are the SAME for both
-    # daily batches, so batch2 reuses batch1's phase1+phase2 instead of re-collecting — this also
-    # keeps batch2 working when the live fixtures service is unavailable.
-    reuse_b1 = False
-    if batch == 2:
-        b1_dir = REPO / "runs" / f"{date}_batch1"
-        if (b1_dir / "phase1" / "selected-fixtures.json").is_file():
-            shutil.copytree(b1_dir / "phase1", run_dir / "phase1", dirs_exist_ok=True)
-            if (b1_dir / "phase2").is_dir():
-                shutil.copytree(b1_dir / "phase2", run_dir / "phase2", dirs_exist_ok=True)
-            reuse_b1 = True
-            print("[info] batch2: reusing batch1 phase1+phase2 (spec: steps 1-2 identical)", flush=True)
-    _phase1(config, run_dir, args.dry_run, args.skip_collect or reuse_b1, args.fixtures_file)
+    # 1-2. collect + research are daily-reusable. Later differentiated batches reuse the
+    # earliest same-day phase1/phase2 instead of re-collecting.
+    reused_daily = False
+    if batch > 1:
+        for previous in range(1, batch):
+            previous_dir = REPO / "runs" / f"{date}_batch{previous}"
+            if (previous_dir / "phase1" / "selected-fixtures.json").is_file():
+                shutil.copytree(previous_dir / "phase1", run_dir / "phase1", dirs_exist_ok=True)
+                if (previous_dir / "phase2").is_dir():
+                    shutil.copytree(previous_dir / "phase2", run_dir / "phase2", dirs_exist_ok=True)
+                reused_daily = True
+                print(f"[info] batch{batch}: reusing batch{previous} phase1+phase2 (daily steps identical)", flush=True)
+                break
+    _phase1(config, run_dir, args.dry_run, args.skip_collect or reused_daily, args.fixtures_file)
     _phase2(run_dir, args.dry_run, args.research_dir)
 
-    # 3. style selection + posters (batch-specific style)
+    # 3. style selection + posters (same-day batches must use different styles)
     hist = _load_history()
-    batch1_style = None
-    if batch == 2:
-        b1 = run_dir.parent / f"{date}_batch1" / "phase3" / "style-selection.json"
-        if b1.is_file():
-            batch1_style = _read_json(b1).get("selected_style")
-    sel = _select_style(hist, batch, batch1_style)
+    sel = _select_style(hist, batch, date)
     style = sel["selected_style"]
     style_scene = _STYLE_SCENE.get(style, "Vertical 9:16 clean floodlit stadium at night, dark green and gold cinematic colour palette.")
     _write_json(run_dir / "phase3" / "style-selection.json", sel)

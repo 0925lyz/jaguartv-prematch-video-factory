@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import random
 import re
 import subprocess
 import time
@@ -79,19 +80,26 @@ def deterministic_batch_rotation(
     if not middle_pairs:
         raise VideoGenerationError("Component pools need at least two distinct operation-class videos")
     other_combinations = list(itertools.product(pools["cta"], pools["music"], pools["voice"]))
-    if len(fixture_ids) > len(middle_pairs) * len(other_combinations):
+    combinations = list(itertools.product(middle_pairs, other_combinations))
+    if len(fixture_ids) > len(combinations):
         raise VideoGenerationError("Component pools cannot provide unique same-day combinations")
-    offset = int(hashlib.sha256(date_brt.encode()).hexdigest(), 16)
-    return {
-        fixture_id: {
-            "operation": middle_pairs[(offset + index) % len(middle_pairs)][0],
-            "interface": middle_pairs[(offset + index) % len(middle_pairs)][1],
-            "cta": other_combinations[((offset // 7) + index) % len(other_combinations)][0],
-            "music": other_combinations[((offset // 7) + index) % len(other_combinations)][1],
-            "voice": other_combinations[((offset // 7) + index) % len(other_combinations)][2],
+
+    rng = random.Random(hashlib.sha256(date_brt.encode()).hexdigest())
+    shuffled_fixture_ids = list(fixture_ids)
+    shuffled_combinations = list(combinations)
+    rng.shuffle(shuffled_fixture_ids)
+    rng.shuffle(shuffled_combinations)
+
+    selected: dict[str, dict[str, str]] = {}
+    for fixture_id, (middle_pair, other) in zip(shuffled_fixture_ids, shuffled_combinations):
+        selected[fixture_id] = {
+            "operation": middle_pair[0],
+            "interface": middle_pair[1],
+            "cta": other[0],
+            "music": other[1],
+            "voice": other[2],
         }
-        for index, fixture_id in enumerate(fixture_ids)
-    }
+    return selected
 
 
 def make_vertical_master(poster: Path, output: Path) -> dict[str, Any]:

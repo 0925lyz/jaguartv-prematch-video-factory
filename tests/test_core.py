@@ -14,6 +14,15 @@ from jaguartv_prematch.selection import selection_reason
 from jaguartv_prematch.upload import _validated_base_url
 from jaguartv_prematch.video import deterministic_batch_rotation, video_filenames
 
+import importlib.util
+
+
+_TASK1_DRIVER = Path(__file__).resolve().parents[1] / "scripts" / "task1_driver.py"
+_spec = importlib.util.spec_from_file_location("task1_driver", _TASK1_DRIVER)
+task1_driver = importlib.util.module_from_spec(_spec)
+assert _spec and _spec.loader
+_spec.loader.exec_module(task1_driver)
+
 
 def fixture(**overrides):
     values = {
@@ -101,6 +110,98 @@ def test_video_filenames_use_manifest_sequence_prefix():
     names = video_filenames("桑托斯_vs_帕尔梅拉斯_260923_海报.png", 4, 2)
     assert names["media_stem"].startswith("02桑托斯_vs_帕尔梅拉斯_260923_海报")
     assert names["final"].startswith("final-02桑托斯_vs_帕尔梅拉斯_260923_海报")
+
+
+def test_auto_batch_selects_next_after_completed_batches(tmp_path, monkeypatch):
+    monkeypatch.setattr(task1_driver, "REPO", tmp_path)
+    (tmp_path / "runs" / "20260905_batch1").mkdir(parents=True)
+    (tmp_path / "runs" / "20260905_batch1" / "automation-summary.json").write_text(
+        json.dumps({"upload": "PHASE5_COMPLETE"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "runs" / "20260905_batch2").mkdir(parents=True)
+    (tmp_path / "runs" / "20260905_batch2" / "automation-summary.json").write_text(
+        json.dumps({"upload": "PHASE5_COMPLETE"}),
+        encoding="utf-8",
+    )
+
+    assert task1_driver._detect_batch("20260905") == 3
+
+
+def test_auto_batch_ignores_incomplete_batch(tmp_path, monkeypatch):
+    monkeypatch.setattr(task1_driver, "REPO", tmp_path)
+    (tmp_path / "runs" / "20260905_batch1").mkdir(parents=True)
+    (tmp_path / "runs" / "20260905_batch1" / "automation-summary.json").write_text(
+        json.dumps({"upload": "PHASE5_COMPLETE"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "runs" / "20260905_batch2").mkdir(parents=True)
+    (tmp_path / "runs" / "20260905_batch2" / "automation-summary.json").write_text(
+        json.dumps({"upload": "DRY_RUN_NOT_UPLOADED"}),
+        encoding="utf-8",
+    )
+
+    assert task1_driver._detect_batch("20260905") == 2
+
+
+def test_same_day_styles_do_not_repeat(tmp_path, monkeypatch):
+    monkeypatch.setattr(task1_driver, "REPO", tmp_path)
+    prior = tmp_path / "runs" / "20260905_batch1" / "phase3"
+    prior.mkdir(parents=True)
+    prior.joinpath("style-selection.json").write_text(
+        json.dumps({"selected_style": "neon_editorial"}),
+        encoding="utf-8",
+    )
+    hist = {"pool": ["neon_editorial", "broadcast_green_gold"], "recent_styles": []}
+
+    selected = task1_driver._select_style(hist, 2, "20260905")
+
+    assert selected["selected_style"] == "broadcast_green_gold"
+    assert "neon_editorial" in selected["excluded_same_day_styles"]
+
+
+def test_same_day_styles_fail_when_pool_exhausted(tmp_path, monkeypatch):
+    monkeypatch.setattr(task1_driver, "REPO", tmp_path)
+    for batch, style in [(1, "a"), (2, "b")]:
+        phase3 = tmp_path / "runs" / f"20260905_batch{batch}" / "phase3"
+        phase3.mkdir(parents=True)
+        phase3.joinpath("style-selection.json").write_text(
+            json.dumps({"selected_style": style}),
+            encoding="utf-8",
+        )
+    hist = {"pool": ["a", "b"], "recent_styles": []}
+
+    with pytest.raises(RuntimeError, match="no unused poster style"):
+        task1_driver._select_style(hist, 3, "20260905")
+
+
+def test_captions_change_between_batches(tmp_path):
+    run_dir = tmp_path / "20260905_batch1"
+    phase1 = run_dir / "phase1"
+    phase2 = run_dir / "phase2"
+    phase1.mkdir(parents=True)
+    phase2.mkdir(parents=True)
+    fx = fixture(
+        fixture_id="fixture-1",
+        competition="Campeonato Brasileiro Série A",
+        home_team="Santos",
+        away_team="Palmeiras",
+        schedule_date="2026-09-05",
+        kickoff_at_brt="20:30",
+    ).to_dict()
+    phase1.joinpath("selected-fixtures.json").write_text(json.dumps({"fixtures": [fx]}, ensure_ascii=False), encoding="utf-8")
+    phase2.joinpath("fixture-1_research.json").write_text(
+        json.dumps({"projected_or_inferred": [{"claim": "Editorial prediction: Santos 1 x 2 Palmeiras"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    items = [{"task_id": "fixture-1", "kind": "single"}]
+
+    batch1 = task1_driver._captions_for_batch(run_dir, items, 1)["items"][0]["description"]
+    batch2 = task1_driver._captions_for_batch(run_dir, items, 2)["items"][0]["description"]
+
+    assert batch1 != batch2
+    assert "Santos x Palmeiras" in batch1
+    assert "Santos x Palmeiras" in batch2
 
 
 def test_caption_has_exactly_five_hashtags_with_marketing(tmp_path):
