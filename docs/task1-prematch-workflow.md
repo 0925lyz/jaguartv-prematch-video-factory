@@ -30,6 +30,9 @@ This is the canonical workflow for `0925lyz/jaguartv-prematch-video-factory`. Us
   directory is intentionally retired so clone/update/run uses one repository and one logic path.
 - First automation batch posters: Desktop folder `每日赛前海报1`; videos: `赛前预测1`.
 - Second automation batch posters: Desktop folder `每日赛前海报2`; videos: `赛前预测2`.
+- For a forced third same-day version, call `scripts/task1_launcher.sh 3`. `auto` resumes the next
+  incomplete/unfinished batch first, so it will keep returning to batch 2 until batch 2 has a
+  `PHASE5_COMPLETE` automation summary.
 - The media delivery command can also build the consolidated `赛前海报视频` folder with `赛前海报`, `操作类`, and `cta` subfolders.
 - If a Lark/飞书 account adapter is configured, select one video plus its matching caption for the group before final delivery numbering. That sampled Lark video is not included in the final delivery folder, server upload, or all-caption order. If Lark is not configured, stop at that integration gate and report it.
 

@@ -1,4 +1,5 @@
 import json
+import http.client
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -7,6 +8,7 @@ import pytest
 
 from jaguartv_prematch.collector import tomorrow_brasilia
 from jaguartv_prematch.config import FactoryConfig
+from jaguartv_prematch.image2 import _download_image_url
 from jaguartv_prematch.pipeline import _caption_for, run_phase1, run_phase3
 from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexDeepSeekRouter, ProviderRoutingError
@@ -224,6 +226,32 @@ def test_caption_has_exactly_five_hashtags_with_marketing(tmp_path):
 def test_upload_url_rejects_embedded_credentials():
     with pytest.raises(ValueError):
         _validated_base_url("https://user:password@example.com")
+
+
+def test_image_url_download_retries_incomplete_read(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"png"
+
+    calls = {"count": 0}
+
+    def fake_urlopen(url, timeout):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise http.client.IncompleteRead(b"partial")
+        return Response()
+
+    monkeypatch.setattr("jaguartv_prematch.image2.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("jaguartv_prematch.image2.time.sleep", lambda _: None)
+
+    assert _download_image_url("https://example.invalid/image.png", 1) == b"png"
+    assert calls["count"] == 2
 
 
 def test_phase1_uses_manual_fixture_file_when_collector_fails(tmp_path):

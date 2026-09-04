@@ -6,10 +6,11 @@
 # success from failure.
 #
 # Usage:
-#   task1_launcher.sh <batch:auto|1|2> [extra driver args...]
+#   task1_launcher.sh <batch:auto|positive-number> [extra driver args...]
 # Examples:
 #   task1_launcher.sh 1                # production batch 1 (live fixture collect)
 #   task1_launcher.sh 2                # production batch 2
+#   task1_launcher.sh 3                # force a third differentiated batch
 #   task1_launcher.sh 1 --dry-run      # preflight smoke test
 #   task1_launcher.sh 1 --fixtures-file /path/to/fixtures.json   # file fallback
 set -uo pipefail

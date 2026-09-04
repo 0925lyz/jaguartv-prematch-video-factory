@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import time
@@ -61,14 +62,13 @@ def generate_image2(
                 if image.get("b64_json"):
                     output.write_bytes(base64.b64decode(image["b64_json"]))
                 elif image.get("url"):
-                    with urllib.request.urlopen(image["url"], timeout=timeout) as response:
-                        output.write_bytes(response.read())
+                    output.write_bytes(_download_image_url(image["url"], timeout))
                 else:
                     raise RuntimeError("Image provider returned no image data")
                 attempts.append(ProviderUse(provider_id, model_id, started, _now(), "ok",
                                             fallback_from=image_config["primary"]["provider_id"] if index else None))
                 return attempts
-            except (KeyError, OSError, RuntimeError, urllib.error.URLError) as error:
+            except (KeyError, OSError, RuntimeError, urllib.error.URLError, http.client.HTTPException) as error:
                 attempts.append(ProviderUse(provider_id, model_id, started, _now(), "failed",
                                             fallback_from=image_config["primary"]["provider_id"] if index else None,
                                             sanitized_error=_sanitize(error)))
@@ -90,6 +90,22 @@ def _sanitize(error: Exception) -> str:
     if isinstance(error, KeyError):
         return f"Required configuration or response field missing: {error.args[0]}"
     return str(error)[:500]
+
+
+def _download_image_url(url: str, timeout: int, attempts: int = 3) -> bytes:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                data = response.read()
+            if data:
+                return data
+            raise RuntimeError("Image provider returned an empty image")
+        except (http.client.IncompleteRead, TimeoutError, urllib.error.URLError, OSError) as error:
+            last_error = error
+            if attempt < attempts - 1:
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"image URL download failed after {attempts} attempts: {_sanitize(last_error or RuntimeError('unknown'))}")
 
 
 def _resolve_image(result: Any, base_url: str, api_key: str, timeout: int) -> dict[str, Any]:

@@ -46,6 +46,7 @@ research evidence or external integrations are unavailable.
 ```bash
 scripts/task1_launcher.sh auto
 scripts/task1_launcher.sh auto --dry-run --fixtures-file examples/manual-fixtures.example.json
+scripts/task1_launcher.sh 3 --skip-collect   # force a third same-day version from existing phase1/phase2
 ```
 
 `jaguartv-prematch phase1` ... `phase5` remains available for debugging individual phases, but
