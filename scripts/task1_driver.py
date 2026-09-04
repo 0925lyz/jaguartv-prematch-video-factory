@@ -290,7 +290,9 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
     })
 
     items = []
-    for task in tasks:
+    total = len(tasks)
+    for index, task in enumerate(tasks, 1):
+        print(f"[phase3] {index}/{total} image2 poster start: {task['id']}", flush=True)
         prompt_path = phase_dir / "prompts" / f"{task['id']}.txt"
         poster_path = phase_dir / "posters" / task["filename"]
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,6 +313,7 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
             "poster": str(poster_path), "fixed_logo_overlay": logo_overlay,
             "channel_logo_overlay": channel_overlay, "image_route": route,
         })
+        print(f"[phase3] {index}/{total} poster complete: {poster_path.name}", flush=True)
     manifest = {"ok": True, "status": "PHASE3_COMPLETE", "poster_count": len(items), "items": items}
     _write_json(phase_dir / "poster-manifest.json", manifest)
     return manifest
@@ -340,8 +343,10 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
     pools = _component_pools(REPO_ROOT)
     rotations = deterministic_batch_rotation(date_seed, [i["task_id"] for i in posters], pools)
     items = []
+    total = len(posters)
     for seq, item in enumerate(posters, 1):
         poster = Path(item["poster"])
+        print(f"[phase4] {seq}/{total} video start: {poster.name}", flush=True)
         names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)), seq)
         out = phase_dir / names["media_stem"]
         master = out / names["master"]
@@ -372,10 +377,13 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
             # whose content no longer matches the freshly generated poster.
             for _stale in out.glob("*.mp4"):
                 _stale.unlink()
+            print(f"[phase4] {seq}/{total} submit dreamina: {master.name}", flush=True)
             task_id = submit_dreamina_hook(master, motion_prompt, config.data["video"])
+            print(f"[phase4] {seq}/{total} poll dreamina: {task_id}", flush=True)
             raw = download_dreamina_result(task_id, out, config.data["video"].get("dreamina_command", "dreamina"))
             dreamina = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
                         "task_id": task_id, "raw_video": str(raw)}
+            print(f"[phase4] {seq}/{total} dreamina downloaded: {Path(raw).name}", flush=True)
         make_exact_hook(master, raw, hook)
         compose_v7(REPO_ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
         _check_duration(final, 12.0)
@@ -385,6 +393,11 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
             "cover_source": "full poster master", "motion_prompt": str(motion_path), "master_info": master_info,
             "components": rotations[item["task_id"]], "dreamina": dreamina,
         })
+        _write_json(phase_dir / "build-manifest.partial.json", {
+            "ok": True, "status": "PHASE4_IN_PROGRESS", "video_count": len(items),
+            "expected_video_count": total, "date_seed": date_seed, "batch": batch, "items": items,
+        })
+        print(f"[phase4] {seq}/{total} final complete: {final.name}", flush=True)
     captions = _captions_for_batch(run_dir, items, batch)
     _write_json(phase_dir / "captions.json", captions)
     manifest = {
