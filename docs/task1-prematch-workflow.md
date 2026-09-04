@@ -7,6 +7,9 @@ This is the canonical workflow for `0925lyz/jaguartv-prematch-video-factory`. Us
 - Development and WorkBuddy execution directory: `/Users/jaguar/WorkBuddy/赛前/jaguartv-prematch-video-factory`
 - GitHub remote: `git@github.com:0925lyz/jaguartv-prematch-video-factory.git`
 - Inventory label: `赛前预测`
+- Production entrypoint: `/Users/jaguar/WorkBuddy/赛前/jaguartv-prematch-video-factory/scripts/task1_launcher.sh auto`
+- Canonical driver: `/Users/jaguar/WorkBuddy/赛前/jaguartv-prematch-video-factory/scripts/task1_driver.py`
+- Deprecated external entrypoint: `/Users/jaguar/WorkBuddy/赛前/jaguartv-prematch-automation` must not be used.
 
 ## Phase flow
 
@@ -23,6 +26,8 @@ This is the canonical workflow for `0925lyz/jaguartv-prematch-video-factory`. Us
 
 ## Daily delivery
 
+- Production must enter through `scripts/task1_launcher.sh`; the old sibling WorkBuddy automation
+  directory is intentionally retired so clone/update/run uses one repository and one logic path.
 - First automation batch posters: Desktop folder `每日赛前海报1`; videos: `赛前预测1`.
 - Second automation batch posters: Desktop folder `每日赛前海报2`; videos: `赛前预测2`.
 - The media delivery command can also build the consolidated `赛前海报视频` folder with `赛前海报`, `操作类`, and `cta` subfolders.

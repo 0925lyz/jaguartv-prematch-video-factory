@@ -39,13 +39,18 @@ jaguartv-prematch preflight --config config/local.json
 jaguartv-prematch collect --config config/local.json --output runs/manual/phase1
 ```
 
-Run the complete workflow. Use `--dry-run` only for local pipeline verification; production mode
-still stops when current research evidence or external integrations are unavailable.
+Run the complete Task 1 workflow through the canonical WorkBuddy/Codex entrypoint. Use
+`--dry-run` only for local pipeline verification; production mode still stops when current
+research evidence or external integrations are unavailable.
 
 ```bash
-jaguartv-prematch run --config config/local.json
-jaguartv-prematch run --config config/local.json --dry-run --fixtures-file examples/manual-fixtures.example.json
+scripts/task1_launcher.sh auto
+scripts/task1_launcher.sh auto --dry-run --fixtures-file examples/manual-fixtures.example.json
 ```
+
+`jaguartv-prematch phase1` ... `phase5` remains available for debugging individual phases, but
+daily production should not call `jaguartv-prematch run` directly because it bypasses the batch
+style rotation, Lark sample exclusion, and Desktop delivery rules.
 
 Build a media delivery folder by passing only the approved source roots:
 

@@ -21,6 +21,14 @@ These rules apply to every task and automation in this repository.
 - Generate only the opening 3-4 second poster hook. Middle operation clips, CTA, music, and voiceover must come from existing authorized inventory and be stitched into the final video.
 - Text, image, and video provider selections are independent.
 
+## Execution entrypoint
+
+- Production and WorkBuddy runs must use `scripts/task1_launcher.sh auto` from this repository.
+- `scripts/task1_driver.py` is the only Task 1 batch driver. Do not call or recreate the old sibling
+  `/Users/jaguar/WorkBuddy/赛前/jaguartv-prematch-automation` entrypoint.
+- The package CLI may be used for isolated phase debugging only; daily production must not call
+  `jaguartv-prematch run` directly.
+
 ## Production safety
 
 - Stop at the first unavailable required integration and report the sanitized error.
