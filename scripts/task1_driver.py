@@ -623,9 +623,14 @@ def _deliver(run_dir: Path, batch: int, captions: dict, exclude_task_ids: set[st
         dest_name = v.name.replace("final-", "", 1)
         shutil.copy(v, video_dst / dest_name)
         copied["videos"] += 1
+    # Deliver a plain, copy-paste-ready pt-BR caption draft (no numbering, no filenames,
+    # no field labels) instead of the raw captions.json. The full captions.json remains in
+    # the run dir (phase4/captions.json) for the record; only the clean draft ships to desktop.
     filtered = {**captions, "items": [i for i in captions.get("items", []) if i.get("task_id") not in exclude_task_ids]}
-    _write_json(video_dst / "captions.json", filtered)
-    copied["captions"] = str(video_dst / "captions.json")
+    copy_text = "\n\n".join(i.get("description", "").strip() for i in filtered.get("items", []))
+    copy_path = video_dst / "文案稿.txt"
+    copy_path.write_text((copy_text + "\n") if copy_text else "", encoding="utf-8")
+    copied["copy_text"] = str(copy_path)
     return {"poster_folder": str(poster_dst), "video_folder": str(video_dst), **copied}
 
 
