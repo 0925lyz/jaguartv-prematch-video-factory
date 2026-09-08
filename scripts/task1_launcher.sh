@@ -27,6 +27,14 @@ export PATH=/Users/jaguar/.workbuddy/binaries/node/versions/22.22.2-2/bin:$PATH
 BATCH="${1:-auto}"; shift || true
 TS=$(date +%Y%m%d-%H%M%S)
 LOG="$LOGDIR/task1_B${BATCH}_${TS}.log"
+LOCKDIR="$REPO/runs/.task1-production.lock"
+
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  echo "[launcher] another task1 production is running; lock=$LOCKDIR" | tee -a "$LOG"
+  exit 75
+fi
+cleanup_lock() { rmdir "$LOCKDIR" 2>/dev/null || true; }
+trap cleanup_lock EXIT INT TERM
 
 echo "[launcher $(date -u +%FT%TZ)] batch=$BATCH log=$LOG" | tee -a "$LOG"
 "$VENV_PY" "$DRIVER" --batch "$BATCH" "$@" 2>&1 | tee -a "$LOG"

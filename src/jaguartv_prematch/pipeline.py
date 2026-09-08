@@ -751,8 +751,10 @@ def _match_time_iso(date: str, kickoff: str) -> str:
 
 def _run_date_iso(run_dir: Path) -> str:
     name = run_dir.name
-    if re.fullmatch(r"\d{8}", name):
-        return f"{name[0:4]}-{name[4:6]}-{name[6:8]}"
+    match = re.fullmatch(r"(\d{8})(?:_batch\d+)?", name)
+    if match:
+        value = match.group(1)
+        return f"{value[0:4]}-{value[4:6]}-{value[6:8]}"
     return tomorrow_brasilia()
 
 

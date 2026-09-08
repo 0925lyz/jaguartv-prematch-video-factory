@@ -132,6 +132,8 @@ def make_vertical_master(poster: Path, output: Path) -> dict[str, Any]:
 
 def make_exact_hook(master: Path, raw_motion: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
+    if raw_motion.resolve() == output.resolve():
+        raise VideoGenerationError(f"Raw Dreamina motion input and hook output are the same file: {output}")
     filter_graph = (
         "[0:v]scale=1080:1920,trim=duration=0.12,setpts=PTS-STARTPTS,fps=30[still];"
         "[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
@@ -168,17 +170,33 @@ def submit_dreamina_hook(master: Path, prompt: str, video_config: dict[str, Any]
     return str(task_id)
 
 
+def _dreamina_raw_downloads(output_dir: Path, task_id: str, known_files: set[Path]) -> list[Path]:
+    candidates = sorted(output_dir.glob("*.mp4"), key=lambda path: path.stat().st_mtime, reverse=True)
+    # Never treat locally derived videos as Dreamina raw motion. A previous interrupted
+    # run can leave hook-*.mp4/final-*.mp4 in the same directory; returning those causes
+    # ffmpeg input/output path collisions or recursive composition.
+    raw_like = [path for path in candidates if not path.name.startswith(("hook-", "final-"))]
+    task_named = [path for path in raw_like if task_id and task_id in path.name]
+    if task_named:
+        return task_named
+    # Some Dreamina CLI versions may not include the submit id in the downloaded filename.
+    # In that case accept only newly-created raw-like files from this polling call, never
+    # stale raw mp4s already present before query_result ran.
+    return [path for path in raw_like if path not in known_files]
+
+
 def download_dreamina_result(task_id: str, output_dir: Path, command_name: str = "dreamina", timeout_seconds: int = 600, poll_interval: int = 10) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        known_files = set(output_dir.glob("*.mp4"))
         result = subprocess.run(
             [command_name, "query_result", "--submit_id", task_id, "--download_dir", str(output_dir)],
             capture_output=True, text=True, check=False, timeout=120,
         )
         if result.returncode != 0:
             raise VideoGenerationError(_sanitize(result.stderr or result.stdout))
-        candidates = sorted(output_dir.glob("*.mp4"), key=lambda path: path.stat().st_mtime, reverse=True)
+        candidates = _dreamina_raw_downloads(output_dir, task_id, known_files)
         if candidates:
             return candidates[0]
         payload = _extract_json(result.stdout)

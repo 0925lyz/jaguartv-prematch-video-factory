@@ -11,3 +11,4 @@ delivery/
 secrets/
 *.log
 .tmp-pytest/
+.workbuddy/

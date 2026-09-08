@@ -14,7 +14,7 @@ from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexDeepSeekRouter, ProviderRoutingError
 from jaguartv_prematch.selection import selection_reason
 from jaguartv_prematch.upload import _validated_base_url
-from jaguartv_prematch.video import deterministic_batch_rotation, video_filenames
+from jaguartv_prematch.video import _dreamina_raw_downloads, deterministic_batch_rotation, video_filenames
 
 import importlib.util
 
@@ -114,6 +114,18 @@ def test_video_filenames_use_manifest_sequence_prefix():
     assert names["final"].startswith("final-02桑托斯_vs_帕尔梅拉斯_260923_海报")
 
 
+def test_dreamina_download_selection_ignores_hook_and_final_outputs(tmp_path):
+    hook = tmp_path / "hook-05260908_赛程海报-3s.mp4"
+    final = tmp_path / "final-05260908_赛程海报-12s.mp4"
+    raw = tmp_path / "0f53000a-1957-4439-a4ea-6ccfe4c68981_video_1.mp4"
+    for path in (hook, final, raw):
+        path.write_bytes(b"mp4")
+
+    selected = _dreamina_raw_downloads(tmp_path, "0f53000a-1957-4439-a4ea-6ccfe4c68981", set())
+
+    assert selected == [raw]
+
+
 def test_auto_batch_selects_next_after_completed_batches(tmp_path, monkeypatch):
     monkeypatch.setattr(task1_driver, "REPO", tmp_path)
     (tmp_path / "runs" / "20260905_batch1").mkdir(parents=True)
@@ -142,6 +154,19 @@ def test_auto_batch_ignores_incomplete_batch(tmp_path, monkeypatch):
         json.dumps({"upload": "DRY_RUN_NOT_UPLOADED"}),
         encoding="utf-8",
     )
+
+    assert task1_driver._detect_batch("20260905") == 2
+
+
+def test_auto_batch_fills_missing_lower_batch_before_appending(tmp_path, monkeypatch):
+    monkeypatch.setattr(task1_driver, "REPO", tmp_path)
+    for batch in (1, 3):
+        run_dir = tmp_path / "runs" / f"20260905_batch{batch}"
+        run_dir.mkdir(parents=True)
+        run_dir.joinpath("automation-summary.json").write_text(
+            json.dumps({"upload": "PHASE5_COMPLETE"}),
+            encoding="utf-8",
+        )
 
     assert task1_driver._detect_batch("20260905") == 2
 

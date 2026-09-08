@@ -27,8 +27,12 @@ import random
 import shutil
 import subprocess
 import sys
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import requests
 
 # --- make the repository importable ------------------------------------------------------
 REPO = Path(__file__).resolve().parents[1]
@@ -65,7 +69,7 @@ from jaguartv_prematch.pipeline import (  # noqa: E402
     _yyMMdd,
     _zh,
 )
-from jaguartv_prematch.upload import upload_pending_review  # noqa: E402
+from jaguartv_prematch.upload import UploadError, upload_pending_review  # noqa: E402
 from jaguartv_prematch.video import (  # noqa: E402
     compose_v7,
     deterministic_batch_rotation,
@@ -74,6 +78,7 @@ from jaguartv_prematch.video import (  # noqa: E402
     make_vertical_master,
     submit_dreamina_hook,
     video_filenames,
+    VideoGenerationError,
 )
 
 BRT = timezone(timedelta(hours=-3))
@@ -118,8 +123,11 @@ def _completed_batches(date: str) -> list[int]:
 
 
 def _detect_batch(date: str) -> int:
-    completed = _completed_batches(date)
-    return (max(completed) + 1) if completed else 1
+    completed = set(_completed_batches(date))
+    batch = 1
+    while batch in completed:
+        batch += 1
+    return batch
 
 
 def _read_json(path: Path):
@@ -137,9 +145,109 @@ def _run(cmd, **kw):
 
 
 def _sync_repo() -> None:
+    if os.environ.get("JAGUARTV_SKIP_REPO_SYNC") == "1":
+        print("[warn] repo sync skipped by JAGUARTV_SKIP_REPO_SYNC=1", flush=True)
+        return
     r = _run(["git", "-C", str(REPO), "pull", "--rebase", "origin", "main"], timeout=120)
     if r.returncode != 0:
         raise RuntimeError(f"repo sync failed: {r.stderr or r.stdout}"[:800])
+
+
+def _valid_media(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > 0
+
+
+def _load_phase4_resume_items(phase_dir: Path) -> list[dict]:
+    for name in ("build-manifest.json", "build-manifest.partial.json"):
+        path = phase_dir / name
+        if not path.is_file():
+            continue
+        try:
+            payload = _read_json(path)
+        except Exception:
+            continue
+        items = []
+        for item in payload.get("items", []):
+            final = Path(str(item.get("final", "")))
+            hook = Path(str(item.get("hook", "")))
+            master = Path(str(item.get("master", "")))
+            if _valid_media(final) and _valid_media(hook) and _valid_media(master):
+                items.append(item)
+        if items:
+            return items
+    return []
+
+
+def _is_retryable_video_error(error: Exception) -> bool:
+    message = str(error).lower()
+    retryable = (
+        "ret=1015", "cloudflare", "timeout", "timed out", "deadline", "incompleteread",
+        "connection", "temporarily", "too many requests", "429", "502", "503", "504",
+        "upload image", "upload phase", "no file upload", "without a downloadable mp4",
+    )
+    return any(token in message for token in retryable)
+
+
+def _existing_dreamina_raw(out: Path, task_id: str | None = None) -> Path | None:
+    candidates = []
+    for directory in (out / "dreamina-raw", out):
+        if directory.is_dir():
+            candidates.extend(directory.glob("*.mp4"))
+    raw_like = [path for path in candidates if not path.name.startswith(("hook-", "final-")) and _valid_media(path)]
+    if task_id:
+        task_named = [path for path in raw_like if task_id in path.name]
+        if task_named:
+            return sorted(task_named, key=lambda path: path.stat().st_mtime, reverse=True)[0]
+    if raw_like:
+        return sorted(raw_like, key=lambda path: path.stat().st_mtime, reverse=True)[0]
+    return None
+
+
+def _is_duplicate_upload_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(token in message for token in ("already exists", "same video", "duplicate"))
+
+
+def _is_request_id_reuse_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return "request_id" in message and "already used" in message
+
+
+def _pending_review_existing_task_ids(base_url: str, dashboard_token: str) -> set[str]:
+    try:
+        url = base_url.rstrip("/")
+        response = requests.get(
+            f"{url}/api/originals",
+            params={"status": "PENDING_REVIEW", "category": "pre_match_prediction"},
+            headers={"Authorization": f"Bearer {dashboard_token}"},
+            timeout=60,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        print(f"[warn] pending-review scan skipped: {str(exc)[:240]}", flush=True)
+        return set()
+    rows = payload.get("items") or payload.get("data") or payload.get("records") or []
+    task_ids = set()
+    for row in rows:
+        detail = row
+        upload_id = row.get("id") or row.get("upload_id") or row.get("original_id")
+        if upload_id:
+            try:
+                detail_response = requests.get(
+                    f"{url}/api/originals/{upload_id}",
+                    headers={"Authorization": f"Bearer {dashboard_token}"},
+                    timeout=30,
+                )
+                if detail_response.ok:
+                    detail = detail_response.json()
+            except Exception:
+                detail = row
+        match_info = detail.get("match_info") or detail.get("metadata", {}).get("match_info") or {}
+        task_id = match_info.get("task_id")
+        if task_id:
+            task_ids.add(str(task_id))
+    return task_ids
 
 
 def _names(value) -> list[str]:
@@ -326,12 +434,25 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
         "prompt": _schedule_poster_prompt(fixtures, style_scene), "title": "Agenda JaguarTV",
     })
 
+    existing_items = {}
+    manifest_path = phase_dir / "poster-manifest.json"
+    if manifest_path.is_file():
+        try:
+            existing_items = {str(i.get("task_id")): i for i in _read_json(manifest_path).get("items", [])}
+        except Exception:
+            existing_items = {}
+
     items = []
     total = len(tasks)
     for index, task in enumerate(tasks, 1):
-        print(f"[phase3] {index}/{total} image2 poster start: {task['id']}", flush=True)
         prompt_path = phase_dir / "prompts" / f"{task['id']}.txt"
         poster_path = phase_dir / "posters" / task["filename"]
+        existing = existing_items.get(str(task["id"]))
+        if existing and _valid_media(Path(str(existing.get("poster", "")))):
+            print(f"[phase3] {index}/{total} poster resume: {poster_path.name}", flush=True)
+            items.append(existing)
+            continue
+        print(f"[phase3] {index}/{total} image2 poster start: {task['id']}", flush=True)
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
         prompt_path.write_text(task["prompt"], encoding="utf-8")
         if dry_run:
@@ -349,6 +470,10 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
             "task_id": task["id"], "kind": task["kind"], "prompt": str(prompt_path),
             "poster": str(poster_path), "fixed_logo_overlay": logo_overlay,
             "channel_logo_overlay": channel_overlay, "image_route": route,
+        })
+        _write_json(manifest_path, {
+            "ok": True, "status": "PHASE3_IN_PROGRESS", "poster_count": len(items),
+            "expected_poster_count": total, "items": items,
         })
         print(f"[phase3] {index}/{total} poster complete: {poster_path.name}", flush=True)
     manifest = {"ok": True, "status": "PHASE3_COMPLETE", "poster_count": len(items), "items": items}
@@ -379,17 +504,23 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
 
     pools = _component_pools(REPO_ROOT)
     rotations = deterministic_batch_rotation(date_seed, [i["task_id"] for i in posters], pools)
+    resume_items = {str(i.get("task_id")): i for i in _load_phase4_resume_items(phase_dir)}
     items = []
     total = len(posters)
     for seq, item in enumerate(posters, 1):
         poster = Path(item["poster"])
-        print(f"[phase4] {seq}/{total} video start: {poster.name}", flush=True)
         names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)), seq)
         out = phase_dir / names["media_stem"]
         master = out / names["master"]
         hook = out / names["hook"]
         final = out / names["final"]
         cover = out / names["cover"]
+        existing = resume_items.get(str(item["task_id"]))
+        if existing and _valid_media(Path(str(existing.get("final", "")))):
+            print(f"[phase4] {seq}/{total} video resume: {Path(existing['final']).name}", flush=True)
+            items.append(existing)
+            continue
+        print(f"[phase4] {seq}/{total} video start: {poster.name}", flush=True)
         master_info = make_vertical_master(poster, master)
         from PIL import Image
         Image.open(master).save(cover, "JPEG", quality=92)
@@ -409,18 +540,57 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
             _loop_video(master, raw, int(config.data["video"].get("generation_seconds", 4)))
             dreamina = {"provider_id": "dry-run", "task_id": None, "raw_video": str(raw)}
         else:
-            # download_dreamina_result returns the FIRST *.mp4 found in `out`; clear stale artifacts
-            # from previous runs of the same run_dir, or a re-run silently reuses an old hook video
-            # whose content no longer matches the freshly generated poster.
-            for _stale in out.glob("*.mp4"):
-                _stale.unlink()
-            print(f"[phase4] {seq}/{total} submit dreamina: {master.name}", flush=True)
-            task_id = submit_dreamina_hook(master, motion_prompt, config.data["video"])
-            print(f"[phase4] {seq}/{total} poll dreamina: {task_id}", flush=True)
-            raw = download_dreamina_result(task_id, out, config.data["video"].get("dreamina_command", "dreamina"))
-            dreamina = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
-                        "task_id": task_id, "raw_video": str(raw)}
-            print(f"[phase4] {seq}/{total} dreamina downloaded: {Path(raw).name}", flush=True)
+            dreamina_state = out / "dreamina-submit.json"
+            task_id = None
+            if dreamina_state.is_file():
+                try:
+                    task_id = str(_read_json(dreamina_state).get("task_id") or "") or None
+                except Exception:
+                    task_id = None
+            raw = _existing_dreamina_raw(out, task_id)
+            if raw:
+                dreamina = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
+                            "task_id": task_id, "raw_video": str(raw), "reused_raw": True}
+                print(f"[phase4] {seq}/{total} dreamina raw resume: {Path(raw).name}", flush=True)
+            else:
+                last_error = None
+                for attempt in range(1, 5):
+                    try:
+                        raw_dir = out / "dreamina-raw"
+                        if not task_id:
+                            # Keep Dreamina query/download artifacts isolated. Some CLI versions clean or
+                            # rewrite the download_dir; using `out` directly can remove master/cover files
+                            # needed by ffmpeg immediately after polling succeeds.
+                            if raw_dir.is_dir():
+                                shutil.rmtree(raw_dir)
+                            raw_dir.mkdir(parents=True, exist_ok=True)
+                            print(f"[phase4] {seq}/{total} submit dreamina: {master.name}", flush=True)
+                            task_id = submit_dreamina_hook(master, motion_prompt, config.data["video"])
+                            _write_json(dreamina_state, {
+                                "provider_id": config.data["video"]["provider_id"],
+                                "model_id": config.data["video"]["model_id"],
+                                "task_id": task_id,
+                                "raw_dir": str(raw_dir),
+                                "submitted_at": _now_brt().isoformat(),
+                            })
+                        print(f"[phase4] {seq}/{total} poll dreamina: {task_id}", flush=True)
+                        raw = download_dreamina_result(task_id, raw_dir, config.data["video"].get("dreamina_command", "dreamina"))
+                        dreamina = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
+                                    "task_id": task_id, "raw_video": str(raw)}
+                        print(f"[phase4] {seq}/{total} dreamina downloaded: {Path(raw).name}", flush=True)
+                        break
+                    except VideoGenerationError as exc:
+                        last_error = exc
+                        if not _is_retryable_video_error(exc) or attempt >= 4:
+                            raise
+                        task_id = None
+                        if dreamina_state.is_file():
+                            dreamina_state.unlink()
+                        wait_seconds = 20 * attempt
+                        print(f"[phase4] {seq}/{total} dreamina transient error, retry {attempt}/4 after {wait_seconds}s: {exc}", flush=True)
+                        time.sleep(wait_seconds)
+                else:
+                    raise last_error or RuntimeError("dreamina generation failed")
         make_exact_hook(master, raw, hook)
         compose_v7(REPO_ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
         _check_duration(final, 12.0)
@@ -580,16 +750,54 @@ def _phase5(config, run_dir: Path, dry_run: bool, exclude_task_ids: set[str] | N
         _write_json(phase_dir / "upload-manifest.json", result)
         return result
     publishing = config.data["publishing"]
+    base_url = config.env_value(publishing, "dashboard_url_env")
+    upload_token = config.env_value(publishing, "upload_token_env")
+    dashboard_token = config.env_value(publishing, "dashboard_token_env")
+    already_uploaded = set()
+    existing_manifest = phase_dir / "upload-manifest.json"
+    if existing_manifest.is_file():
+        try:
+            for row in _read_json(existing_manifest).get("uploads", []):
+                if row.get("task_id"):
+                    already_uploaded.add(str(row["task_id"]))
+        except Exception:
+            already_uploaded = set()
+    already_uploaded |= _pending_review_existing_task_ids(base_url, dashboard_token)
     uploads = []
     for item in videos:
-        upload = upload_pending_review(
-            Path(item["final"]),
-            _upload_metadata(run_dir, item),
-            base_url=config.env_value(publishing, "dashboard_url_env"),
-            upload_token=config.env_value(publishing, "upload_token_env"),
-            dashboard_token=config.env_value(publishing, "dashboard_token_env"),
-        )
-        uploads.append({"task_id": item["task_id"], **upload})
+        task_id = str(item["task_id"])
+        if task_id in already_uploaded:
+            uploads.append({"task_id": task_id, "already_exists": True, "status": "PENDING_REVIEW"})
+            continue
+        last_error = None
+        for attempt in range(1, 5):
+            metadata = _upload_metadata(run_dir, item)
+            if attempt > 1:
+                metadata.setdefault("metadata", {})["req_nonce"] = f"{run_dir.name}-{task_id}-{attempt}-{uuid.uuid4().hex[:8]}"
+            try:
+                upload = upload_pending_review(
+                    Path(item["final"]),
+                    metadata,
+                    base_url=base_url,
+                    upload_token=upload_token,
+                    dashboard_token=dashboard_token,
+                )
+                uploads.append({"task_id": task_id, **upload})
+                break
+            except UploadError as exc:
+                last_error = exc
+                if _is_duplicate_upload_error(exc):
+                    uploads.append({"task_id": task_id, "already_exists": True, "status": "PENDING_REVIEW"})
+                    break
+                if not _is_request_id_reuse_error(exc) or attempt >= 4:
+                    raise
+                print(f"[phase5] request_id reused for {task_id}, retry with nonce {attempt}/4", flush=True)
+        else:
+            raise last_error or RuntimeError(f"upload failed for {task_id}")
+        _write_json(phase_dir / "upload-manifest.json", {
+            "ok": True, "status": "PHASE5_IN_PROGRESS", "upload_count": len(uploads),
+            "excluded_task_ids": sorted(exclude_task_ids), "uploads": uploads,
+        })
     result = {"ok": True, "status": "PHASE5_COMPLETE", "upload_count": len(uploads),
               "excluded_task_ids": sorted(exclude_task_ids), "uploads": uploads}
     _write_json(phase_dir / "upload-manifest.json", result)
@@ -606,8 +814,6 @@ def _deliver(run_dir: Path, batch: int, captions: dict, exclude_task_ids: set[st
     copied = {"posters": 0, "videos": 0, "excluded_task_ids": sorted(exclude_task_ids)}
     poster_items = _read_json(run_dir / "phase3" / "poster-manifest.json").get("items", [])
     for item in poster_items:
-        if item.get("task_id") in exclude_task_ids:
-            continue
         p = Path(item["poster"])
         shutil.copy(p, poster_dst / p.name)
         copied["posters"] += 1
@@ -663,15 +869,24 @@ def _lark_sample(run_dir: Path, captions: dict, dry_run: bool, task_id: str | No
     import os as _os
     env = dict(_os.environ)
     env["PATH"] = "/Users/jaguar/.workbuddy/binaries/node/versions/22.22.2-2/bin:" + env.get("PATH", "")
-    # lark-cli rejects absolute paths for --video/--file, so run from the media dir with cwd-relative
-    # names. Videos require --video + --video-cover (msg_type=media); plain captions use --text.
+    # lark-cli rejects absolute paths for --video/--file, so send from an isolated
+    # cwd-relative staging copy. This keeps the production phase4 directory immutable even
+    # if the CLI validates, rewrites, or cleans files during upload.
+    lark_dir = run_dir / "phase4" / "lark-sample-staging"
+    if lark_dir.is_dir():
+        shutil.rmtree(lark_dir)
+    lark_dir.mkdir(parents=True, exist_ok=True)
+    staged_video = lark_dir / video.name
+    shutil.copy(video, staged_video)
     if cover:
+        staged_cover = lark_dir / Path(cover).name
+        shutil.copy(cover, staged_cover)
         r1 = _run([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP,
-                   "--video", video.name, "--video-cover", Path(cover).name],
-                 cwd=str(video.parent), env=env, timeout=180)
+                   "--video", staged_video.name, "--video-cover", staged_cover.name],
+                 cwd=str(lark_dir), env=env, timeout=180)
     else:
-        r1 = _run([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP, "--video", video.name],
-                 cwd=str(video.parent), env=env, timeout=180)
+        r1 = _run([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP, "--video", staged_video.name],
+                 cwd=str(lark_dir), env=env, timeout=180)
     r2 = _run([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP, "--text", caption_text],
              env=env, timeout=120)
     if r1.returncode != 0 or r2.returncode != 0:
