@@ -41,6 +41,7 @@ for _p in (str(REPO / "src"), str(REPO)):
         sys.path.insert(0, _p)
 
 from jaguartv_prematch.config import FactoryConfig  # noqa: E402
+from jaguartv_prematch.collector import resolve_target_date  # noqa: E402
 from jaguartv_prematch.image2 import (  # noqa: E402
     generate_image2,
     save_image_route_manifest,
@@ -74,6 +75,7 @@ from jaguartv_prematch.video import (  # noqa: E402
     compose_v7,
     deterministic_batch_rotation,
     download_dreamina_result,
+    generate_apimart_hook,
     make_exact_hook,
     make_vertical_master,
     submit_dreamina_hook,
@@ -100,6 +102,10 @@ def _brt_hour() -> int:
 
 def _tomorrow_brt_yyyymmdd() -> str:
     return (_now_brt() + timedelta(days=1)).strftime("%Y%m%d")
+
+
+def _target_yyyymmdd(value: str | None) -> str:
+    return resolve_target_date(value or "tomorrow", _now_brt()).replace("-", "")
 
 
 def _summary_complete(run_dir: Path) -> bool:
@@ -188,9 +194,9 @@ def _is_retryable_video_error(error: Exception) -> bool:
     return any(token in message for token in retryable)
 
 
-def _existing_dreamina_raw(out: Path, task_id: str | None = None) -> Path | None:
+def _existing_generated_raw(out: Path, task_id: str | None = None) -> Path | None:
     candidates = []
-    for directory in (out / "dreamina-raw", out):
+    for directory in (out / "apimart-raw", out / "dreamina-raw", out):
         if directory.is_dir():
             candidates.extend(directory.glob("*.mp4"))
     raw_like = [path for path in candidates if not path.name.startswith(("hook-", "final-")) and _valid_media(path)]
@@ -526,8 +532,8 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
         Image.open(master).save(cover, "JPEG", quality=92)
         motion_prompt = (
             f"Animate this exact 9:16 JaguarTV pre-match master for 4 seconds: {master.name}. "
-            "Keep the poster-cover composition visible as the dominant full-frame subject throughout the "
-            "first 3 seconds; preserve all Brazilian Portuguese text, player identity, club kit, crests, "
+            "Keep the poster-cover composition visible as the dominant full-frame subject throughout all "
+            "4 seconds; preserve all Brazilian Portuguese text, player identity, club kit, crests, "
             "channel icons, date, kickoff time, prediction, and the upper-right JaguarTV logo. Do not add a "
             "second JaguarTV logo. Make the background alive with stadium lights, crowd depth, sparks, cloth "
             "movement, and a fierce face-to-face player confrontation when two players are present."
@@ -538,7 +544,7 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
         if dry_run:
             raw = out / names["raw_video"]
             _loop_video(master, raw, int(config.data["video"].get("generation_seconds", 4)))
-            dreamina = {"provider_id": "dry-run", "task_id": None, "raw_video": str(raw)}
+            generation = {"provider_id": "dry-run", "model_id": "none", "task_id": None, "raw_video": str(raw), "status": "not_called"}
         else:
             dreamina_state = out / "dreamina-submit.json"
             task_id = None
@@ -547,58 +553,80 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
                     task_id = str(_read_json(dreamina_state).get("task_id") or "") or None
                 except Exception:
                     task_id = None
-            raw = _existing_dreamina_raw(out, task_id)
+            raw = _existing_generated_raw(out, task_id)
             if raw:
-                dreamina = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
-                            "task_id": task_id, "raw_video": str(raw), "reused_raw": True}
-                print(f"[phase4] {seq}/{total} dreamina raw resume: {Path(raw).name}", flush=True)
+                if raw.parent.name == "apimart-raw":
+                    fallback = config.data["video"]["fallback"]
+                    generation = {"provider_id": fallback["provider_id"], "model_id": fallback["model_id"],
+                                  "task_id": None, "raw_video": str(raw), "reused_raw": True, "status": "ok",
+                                  "fallback_from": config.data["video"]["provider_id"]}
+                else:
+                    generation = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
+                                  "task_id": task_id, "raw_video": str(raw), "reused_raw": True, "status": "ok"}
+                print(f"[phase4] {seq}/{total} generated raw resume: {Path(raw).name}", flush=True)
             else:
                 last_error = None
-                for attempt in range(1, 5):
-                    try:
-                        raw_dir = out / "dreamina-raw"
-                        if not task_id:
-                            # Keep Dreamina query/download artifacts isolated. Some CLI versions clean or
-                            # rewrite the download_dir; using `out` directly can remove master/cover files
-                            # needed by ffmpeg immediately after polling succeeds.
-                            if raw_dir.is_dir():
-                                shutil.rmtree(raw_dir)
-                            raw_dir.mkdir(parents=True, exist_ok=True)
-                            print(f"[phase4] {seq}/{total} submit dreamina: {master.name}", flush=True)
-                            task_id = submit_dreamina_hook(master, motion_prompt, config.data["video"])
-                            _write_json(dreamina_state, {
-                                "provider_id": config.data["video"]["provider_id"],
-                                "model_id": config.data["video"]["model_id"],
-                                "task_id": task_id,
-                                "raw_dir": str(raw_dir),
-                                "submitted_at": _now_brt().isoformat(),
-                            })
-                        print(f"[phase4] {seq}/{total} poll dreamina: {task_id}", flush=True)
-                        raw = download_dreamina_result(task_id, raw_dir, config.data["video"].get("dreamina_command", "dreamina"))
-                        dreamina = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
-                                    "task_id": task_id, "raw_video": str(raw)}
-                        print(f"[phase4] {seq}/{total} dreamina downloaded: {Path(raw).name}", flush=True)
-                        break
-                    except VideoGenerationError as exc:
-                        last_error = exc
-                        if not _is_retryable_video_error(exc) or attempt >= 4:
-                            raise
-                        task_id = None
-                        if dreamina_state.is_file():
-                            dreamina_state.unlink()
-                        wait_seconds = 20 * attempt
-                        print(f"[phase4] {seq}/{total} dreamina transient error, retry {attempt}/4 after {wait_seconds}s: {exc}", flush=True)
-                        time.sleep(wait_seconds)
-                else:
-                    raise last_error or RuntimeError("dreamina generation failed")
-        make_exact_hook(master, raw, hook)
-        compose_v7(REPO_ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
-        _check_duration(final, 12.0)
+                try:
+                    for attempt in range(1, 5):
+                        try:
+                            raw_dir = out / "dreamina-raw"
+                            if not task_id:
+                                # Keep Dreamina query/download artifacts isolated. Some CLI versions clean or
+                                # rewrite the download_dir; using `out` directly can remove master/cover files
+                                # needed by ffmpeg immediately after polling succeeds.
+                                if raw_dir.is_dir():
+                                    shutil.rmtree(raw_dir)
+                                raw_dir.mkdir(parents=True, exist_ok=True)
+                                print(f"[phase4] {seq}/{total} submit dreamina: {master.name}", flush=True)
+                                task_id = submit_dreamina_hook(master, motion_prompt, config.data["video"])
+                                _write_json(dreamina_state, {
+                                    "provider_id": config.data["video"]["provider_id"],
+                                    "model_id": config.data["video"]["model_id"],
+                                    "task_id": task_id,
+                                    "raw_dir": str(raw_dir),
+                                    "submitted_at": _now_brt().isoformat(),
+                                })
+                            print(f"[phase4] {seq}/{total} poll dreamina: {task_id}", flush=True)
+                            raw = download_dreamina_result(task_id, raw_dir, config.data["video"].get("dreamina_command", "dreamina"))
+                            generation = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
+                                          "task_id": task_id, "raw_video": str(raw), "status": "ok"}
+                            print(f"[phase4] {seq}/{total} dreamina downloaded: {Path(raw).name}", flush=True)
+                            break
+                        except VideoGenerationError as exc:
+                            last_error = exc
+                            if not _is_retryable_video_error(exc) or attempt >= 4:
+                                raise
+                            task_id = None
+                            if dreamina_state.is_file():
+                                dreamina_state.unlink()
+                            wait_seconds = 20 * attempt
+                            print(f"[phase4] {seq}/{total} dreamina transient error, retry {attempt}/4 after {wait_seconds}s: {exc}", flush=True)
+                            time.sleep(wait_seconds)
+                    else:
+                        raise last_error or RuntimeError("dreamina generation failed")
+                except VideoGenerationError as primary_error:
+                    fallback = config.data["video"].get("fallback")
+                    if not fallback:
+                        raise
+                    fallback_raw = out / "apimart-raw" / f"apimart-{names['media_stem']}-4s.mp4"
+                    print(f"[phase4] {seq}/{total} dreamina unavailable; using configured APIMart fallback", flush=True)
+                    generation = generate_apimart_hook(master, motion_prompt, fallback, fallback_raw)
+                    generation["fallback_from"] = config.data["video"]["provider_id"]
+                    generation["attempts"] = [
+                        {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
+                         "status": "failed", "sanitized_error": str(primary_error)[:500]},
+                        {"provider_id": generation["provider_id"], "model_id": generation["model_id"], "status": "ok"},
+                    ]
+                    raw = fallback_raw
+        make_exact_hook(master, raw, hook, 4.0)
+        final_seconds = compose_v7(REPO_ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
+        _check_duration(final, final_seconds)
         items.append({
             "task_id": item["task_id"], "kind": item.get("kind"), "sequence": seq, "poster": str(poster),
             "master": str(master), "hook": str(hook), "final": str(final), "cover": str(cover),
             "cover_source": "full poster master", "motion_prompt": str(motion_path), "master_info": master_info,
-            "components": rotations[item["task_id"]], "dreamina": dreamina,
+            "generated_seconds": 4, "final_seconds": round(final_seconds, 3),
+            "components": rotations[item["task_id"]], "video_generation": generation,
         })
         _write_json(phase_dir / "build-manifest.partial.json", {
             "ok": True, "status": "PHASE4_IN_PROGRESS", "video_count": len(items),
@@ -631,18 +659,18 @@ def _captions_for_batch(run_dir: Path, items: list[dict], batch: int) -> dict:
     weekday = WEEKDAY_PT[datetime.fromisoformat(date_iso).weekday()]
     out_items = []
     schedule_templates = [
-        "🗓️ Agenda de {weekday}: {rows}. 7 dias grátis no Jaguar TV, TV ao vivo no Android e TV Box. Baixa no jaguartvbrasil.com 📲 {hashtags}",
-        "📺 Guia JaguarTV de {weekday}: {rows}. Escolhe teu jogo, ativa os 7 dias grátis e assiste no Android ou TV Box em jaguartvbrasil.com. {hashtags}",
-        "🔥 Programação pronta para {weekday}: {rows}. Tudo no Jaguar TV, com 7 dias grátis, app Android e TV Box. jaguartvbrasil.com {hashtags}",
-        "⚽ Cola na agenda de {weekday}: {rows}. Pré-jogo, bola rolando e TV ao vivo no Jaguar TV. Teste grátis por 7 dias em jaguartvbrasil.com. {hashtags}",
+        "🗓️ Agenda de {weekday}: {rows}. TV ao vivo no Jaguar TV para Android e TV Box. {download} {hashtags}",
+        "📺 Guia JaguarTV de {weekday}: {rows}. Escolhe teu jogo e acompanha no Android ou TV Box. {download} {hashtags}",
+        "🔥 Programação pronta para {weekday}: {rows}. Tudo no Jaguar TV, com app para Android e TV Box. {download} {hashtags}",
+        "⚽ Cola na agenda de {weekday}: {rows}. Pré-jogo, bola rolando e TV ao vivo no Jaguar TV. {download} {hashtags}",
     ]
     match_templates = [
-        "🔥 É HOJE! {home} x {away} às {kickoff}, {competition}. Palpite JaguarTV: {score}. {tactical} Vem ver ao vivo no Jaguar TV 📺 7 dias grátis no jaguartvbrasil.com, Android e TV Box. {hashtags}",
-        "⚡ Tá chegando! {home} x {away} entra em campo às {kickoff} por {competition}. Meu palpite: {score}. {tactical} Assiste no Jaguar TV: 7 dias grátis em jaguartvbrasil.com, Android e TV Box. {hashtags}",
-        "👀 Jogo com cara de tensão: {home} x {away}, {kickoff}, {competition}. Palpite JaguarTV: {score}. {tactical} Acompanha ao vivo no Jaguar TV, com 7 dias grátis no jaguartvbrasil.com. {hashtags}",
-        "🚨 Anota esse confronto: {home} x {away} às {kickoff}, {competition}. Placar projetado: {score}. {tactical} Jaguar TV no Android e TV Box, teste grátis por 7 dias em jaguartvbrasil.com. {hashtags}",
-        "🎯 Pré-jogo JaguarTV: {home} x {away}, {kickoff}, {competition}. Palpite do dia: {score}. {tactical} Quer ver ao vivo? Jaguar TV tem 7 dias grátis em jaguartvbrasil.com. {hashtags}",
-        "📌 Fica de olho: {home} x {away} às {kickoff}, {competition}. Leitura JaguarTV: {score}. {tactical} Baixa o Jaguar TV e testa 7 dias grátis no Android ou TV Box: jaguartvbrasil.com. {hashtags}",
+        "🔥 É HOJE! {home} x {away} às {kickoff}, {competition}. Palpite JaguarTV: {score}. {tactical} Vem ver ao vivo no Jaguar TV 📺 {download} {hashtags}",
+        "⚡ Tá chegando! {home} x {away} entra em campo às {kickoff} por {competition}. Meu palpite: {score}. {tactical} Assiste no Jaguar TV. {download} {hashtags}",
+        "👀 Jogo com cara de tensão: {home} x {away}, {kickoff}, {competition}. Palpite JaguarTV: {score}. {tactical} Acompanha ao vivo no Jaguar TV. {download} {hashtags}",
+        "🚨 Anota esse confronto: {home} x {away} às {kickoff}, {competition}. Placar projetado: {score}. {tactical} Jaguar TV no Android e TV Box. {download} {hashtags}",
+        "🎯 Pré-jogo JaguarTV: {home} x {away}, {kickoff}, {competition}. Palpite do dia: {score}. {tactical} Quer ver ao vivo? {download} {hashtags}",
+        "📌 Fica de olho: {home} x {away} às {kickoff}, {competition}. Leitura JaguarTV: {score}. {tactical} {download} {hashtags}",
     ]
     for item in items:
         task_id = str(item["task_id"])
@@ -650,10 +678,10 @@ def _captions_for_batch(run_dir: Path, items: list[dict], batch: int) -> dict:
         if item.get("kind") == "schedule" or not fx:
             rows = "; ".join(f"{f['home_team']} x {f['away_team']} ({f['kickoff_at_brt']})"
                              for f in sorted(fixtures, key=lambda r: str(r.get("kickoff_at_brt", ""))))
-            hashtags = ["#futebol", "#brasileirao", "#palpites", "#tvaoVivo", "#jaguartvbrasil"]
+            hashtags = ["#futebol", "#brasileirao", "#palpites", "#jaguartv", "#iptv"]
             template = _caption_choice(run_dir, batch, task_id, schedule_templates)
             out_items.append({"task_id": task_id, "title": f"Agenda de {weekday} na JaguarTV",
-                              "description": template.format(weekday=weekday, rows=rows, hashtags=" ".join(hashtags)),
+                              "description": template.format(weekday=weekday, rows=rows, download="Acesse jaguartvbrasil.com/baixar-app para baixar.", hashtags=" ".join(hashtags)),
                               "hashtags": hashtags})
             continue
         home, away = str(fx.get("home_team")), str(fx.get("away_team"))
@@ -669,6 +697,7 @@ def _captions_for_batch(run_dir: Path, items: list[dict], batch: int) -> dict:
             competition=competition,
             score=score,
             tactical=tactical,
+            download="Acesse jaguartvbrasil.com/baixar-app para baixar.",
             hashtags=" ".join(hashtags),
         ).replace("  ", " ").strip()
         out_items.append({"task_id": task_id, "title": f"Palpite JaguarTV: {home} x {away}",
@@ -684,13 +713,22 @@ def _phase1(config, run_dir: Path, dry_run: bool, skip: bool, fixtures_file: Pat
     if skip and (out / "selected-fixtures.json").is_file():
         return _read_json(out / "selected-fixtures.json")
     cmd = [sys.executable, "-m", "jaguartv_prematch.cli", "collect", "--config", str(config.path),
-           "--output", str(out)]
+           "--output", str(out), "--date", _run_date_iso(run_dir)]
     if fixtures_file:
         cmd += ["--fixtures-file", str(fixtures_file)]
     r = _run(cmd, timeout=120)
     if r.returncode != 0:
         raise RuntimeError(f"phase1 collect failed: {r.stderr or r.stdout}"[:800])
-    return _read_json(out / "selected-fixtures.json")
+    selected = _read_json(out / "selected-fixtures.json")
+    target_date = _run_date_iso(run_dir)
+    wrong_dates = sorted({
+        str(fixture.get("schedule_date"))
+        for fixture in selected.get("fixtures", [])
+        if str(fixture.get("schedule_date")) != target_date
+    })
+    if wrong_dates:
+        raise RuntimeError(f"phase1 date mismatch: target={target_date} returned={wrong_dates}")
+    return selected
 
 
 def _phase2(run_dir: Path, dry_run: bool, research_dir: Path | None) -> dict:
@@ -853,6 +891,18 @@ def _select_lark_task_id(p4: dict) -> str | None:
     return str(picked["task_id"]) if picked else None
 
 
+def _lark_send(command: list[str], **kwargs):
+    result = None
+    for attempt in range(1, 4):
+        result = _run(command, **kwargs)
+        if result.returncode == 0:
+            return result
+        if attempt < 3:
+            print(f"[lark] send failed; retry {attempt}/3", flush=True)
+            time.sleep(10 * attempt)
+    return result
+
+
 def _lark_sample(run_dir: Path, captions: dict, dry_run: bool, task_id: str | None = None) -> dict | None:
     items = _read_json(run_dir / "phase4" / "build-manifest.json").get("items", [])
     item = next((i for i in items if not task_id or i.get("task_id") == task_id), None)
@@ -881,14 +931,14 @@ def _lark_sample(run_dir: Path, captions: dict, dry_run: bool, task_id: str | No
     if cover:
         staged_cover = lark_dir / Path(cover).name
         shutil.copy(cover, staged_cover)
-        r1 = _run([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP,
-                   "--video", staged_video.name, "--video-cover", staged_cover.name],
-                 cwd=str(lark_dir), env=env, timeout=180)
+        r1 = _lark_send([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP,
+                         "--video", staged_video.name, "--video-cover", staged_cover.name],
+                        cwd=str(lark_dir), env=env, timeout=180)
     else:
-        r1 = _run([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP, "--video", staged_video.name],
-                 cwd=str(lark_dir), env=env, timeout=180)
-    r2 = _run([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP, "--text", caption_text],
-             env=env, timeout=120)
+        r1 = _lark_send([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP, "--video", staged_video.name],
+                        cwd=str(lark_dir), env=env, timeout=180)
+    r2 = _lark_send([LARK_CLI, "im", "+messages-send", "--chat-id", LARK_GROUP, "--text", caption_text],
+                    env=env, timeout=120)
     if r1.returncode != 0 or r2.returncode != 0:
         raise RuntimeError(f"lark sample failed: {(r1.stderr or r1.stdout or r2.stderr or r2.stdout)[:800]}")
     return {"task_id": item.get("task_id"), "file_sent": r1.returncode == 0, "text_sent": r2.returncode == 0,
@@ -901,7 +951,7 @@ def main() -> int:
     ap.add_argument("--repo", type=Path, default=REPO)
     ap.add_argument("--config", type=Path, default=REPO / "config" / "local.json")
     ap.add_argument("--batch", default="auto", help="auto or a positive batch number")
-    ap.add_argument("--date", help="YYYYMMDD target (default: tomorrow BRT)")
+    ap.add_argument("--date", help="today, tomorrow, YYYY-MM-DD, or YYYYMMDD (default: tomorrow BRT)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--research-dir", type=Path, default=None)
     ap.add_argument("--skip-collect", action="store_true", help="reuse existing phase1 if present")
@@ -911,7 +961,7 @@ def main() -> int:
                     help="skip phases 1-5; re-send the existing phase4 video+caption to Lark (validation)")
     args = ap.parse_args()
 
-    date = args.date or _tomorrow_brt_yyyymmdd()
+    date = _target_yyyymmdd(args.date)
     if args.batch == "auto":
         batch = _detect_batch(date)
     else:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import date as calendar_date
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -24,6 +26,21 @@ def tomorrow_brasilia(now: datetime | None = None) -> str:
     return (local_now.date() + timedelta(days=1)).isoformat()
 
 
+def resolve_target_date(value: str, now: datetime | None = None) -> str:
+    local_now = now.astimezone(BRASILIA) if now else datetime.now(BRASILIA)
+    normalized = value.strip().lower()
+    if normalized == "today":
+        return local_now.date().isoformat()
+    if normalized == "tomorrow":
+        return (local_now.date() + timedelta(days=1)).isoformat()
+    for pattern in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(normalized, pattern).date().isoformat()
+        except ValueError:
+            pass
+    raise FixtureCollectionError(f"invalid target date: {value}; expected today, tomorrow, YYYY-MM-DD, or YYYYMMDD")
+
+
 def collect_fixtures(
     base_url: str,
     *,
@@ -31,8 +48,14 @@ def collect_fixtures(
     date: str = "tomorrow",
     timeout_seconds: int = 30,
 ) -> tuple[list[Fixture], dict[str, Any]]:
-    separator = "&" if "?" in base_url else "?"
-    url = f"{base_url}{separator}{urllib.parse.urlencode({'date': date})}"
+    target_date = resolve_target_date(date)
+    parsed = urllib.parse.urlsplit(base_url)
+    query = dict(urllib.parse.parse_qsl(parsed.query))
+    if parsed.path.endswith("/api/save-agenda"):
+        query.update({"dedup": "true", "t": str(int(time.time() * 1000))})
+    else:
+        query["date"] = target_date
+    url = urllib.parse.urlunsplit(parsed._replace(query=urllib.parse.urlencode(query)))
     headers = {"Accept": "application/json", "User-Agent": "JaguarTV-Prematch/0.1"}
     if api_key:
         headers["X-API-Key"] = api_key
@@ -45,43 +68,77 @@ def collect_fixtures(
     except (OSError, json.JSONDecodeError) as error:
         raise FixtureCollectionError(f"collector request failed: {type(error).__name__}") from error
 
-    rows = payload.get("fixtures", payload if isinstance(payload, list) else [])
-    fixtures = [_normalize_fixture(row) for row in rows]
-    return fixtures, payload
+    rows = _payload_rows(payload)
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    fixtures = [
+        _normalize_fixture(row, target_date=target_date, retrieved_at=retrieved_at)
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    return [fixture for fixture in fixtures if fixture.schedule_date == target_date], payload
 
 
 def load_fixture_file(path: Path) -> tuple[list[Fixture], dict[str, Any]]:
     payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
-    rows = payload.get("fixtures", payload if isinstance(payload, list) else [])
+    rows = _payload_rows(payload)
     if not isinstance(rows, list):
         raise FixtureCollectionError("manual fixture file must contain a fixtures array")
     fixtures = [_normalize_fixture(row) for row in rows if isinstance(row, dict)]
     return fixtures, {"manual_fixture_file": str(path), "fixtures": [fixture.to_dict() for fixture in fixtures]}
 
 
-def _normalize_fixture(row: dict[str, Any]) -> Fixture:
+def _payload_rows(payload: Any) -> list[Any]:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        rows = payload.get("fixtures") or payload.get("matches") or []
+        return rows if isinstance(rows, list) else []
+    return []
+
+
+def _normalize_fixture(
+    row: dict[str, Any],
+    *,
+    target_date: str | None = None,
+    retrieved_at: str = "",
+) -> Fixture:
     teams = row.get("teams", {})
-    channels = row.get("channels", [])
+    channels = row.get("channels") or ([row["channel"]] if row.get("channel") else [])
     channel_names = tuple(
         str(item.get("name", "")).strip() if isinstance(item, dict) else str(item).strip()
         for item in channels
         if item
     )
+    schedule_date = _schedule_date(str(row.get("schedule_date") or row.get("date") or ""), target_date)
     return Fixture(
         fixture_id=str(row.get("fixture_id") or row.get("id") or row.get("fingerprint") or ""),
         competition=str(row.get("competition") or row.get("league") or "").strip(),
-        home_team=str(row.get("home_team") or teams.get("home") or "").strip(),
-        away_team=str(row.get("away_team") or teams.get("away") or "").strip(),
-        schedule_date=str(row.get("schedule_date") or row.get("date") or ""),
-        kickoff_at_brt=str(row.get("kickoff_at_brt") or row.get("kickoff_time") or ""),
+        home_team=str(row.get("home_team") or row.get("homeTeam") or teams.get("home") or "").strip(),
+        away_team=str(row.get("away_team") or row.get("awayTeam") or teams.get("away") or "").strip(),
+        schedule_date=schedule_date,
+        kickoff_at_brt=str(row.get("kickoff_at_brt") or row.get("kickoff_time") or row.get("time") or ""),
         channels=channel_names,
-        featured=bool(row.get("featured") or row.get("is_featured")),
-        source_url=str(row.get("source_url") or row.get("url") or ""),
-        retrieved_at=str(row.get("retrieved_at") or row.get("retrieval_timestamp") or ""),
-        source_text=str(row.get("source_text") or row.get("original_source_text") or ""),
+        featured=bool(row.get("featured") or row.get("is_featured") or row.get("isHot") or (row.get("isVisible", True) and channel_names)),
+        source_url=str(row.get("source_url") or row.get("url") or "https://copa.jarg.top/jogos-de-hoje"),
+        retrieved_at=str(row.get("retrieved_at") or row.get("retrieval_timestamp") or retrieved_at),
+        source_text=str(row.get("source_text") or row.get("original_source_text") or json.dumps(row, ensure_ascii=False, sort_keys=True)),
         verified_brazilian_players=tuple(row.get("verified_brazilian_players", [])),
         raw=row,
     )
+
+
+def _schedule_date(value: str, target_date: str | None) -> str:
+    value = value.strip()
+    for pattern in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(value, pattern).date().isoformat()
+        except ValueError:
+            pass
+    if target_date:
+        target = calendar_date.fromisoformat(target_date)
+        if value == target.strftime("%d/%m"):
+            return target.isoformat()
+    return value
 
 
 def save_collection(fixtures: list[Fixture], raw: dict[str, Any], output: Path) -> None:

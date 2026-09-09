@@ -18,9 +18,11 @@ from .routing import CodexDeepSeekRouter
 from .selection import select_fixtures
 from .upload import upload_pending_review
 from .video import (
+    VideoGenerationError,
     compose_v7,
     deterministic_batch_rotation,
     download_dreamina_result,
+    generate_apimart_hook,
     make_exact_hook,
     make_vertical_master,
     submit_dreamina_hook,
@@ -237,21 +239,33 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         if dry_run:
             raw = out / names["raw_video"]
             _loop_video(master, raw, int(config.data["video"].get("generation_seconds", 4)))
-            dreamina = {"provider_id": "dry-run", "task_id": None, "raw_video": str(raw)}
+            generation = {"provider_id": "dry-run", "model_id": "none", "task_id": None, "raw_video": str(raw), "status": "not_called"}
         else:
-            task_id = submit_dreamina_hook(master, motion_prompt, config.data["video"])
-            raw = download_dreamina_result(task_id, out, config.data["video"].get("dreamina_command", "dreamina"))
-            dreamina = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"], "task_id": task_id, "raw_video": str(raw)}
-        make_exact_hook(master, raw, hook)
-        compose_v7(ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
-        _check_duration(final, 12.0)
+            try:
+                task_id = submit_dreamina_hook(master, motion_prompt, config.data["video"])
+                raw = download_dreamina_result(task_id, out, config.data["video"].get("dreamina_command", "dreamina"))
+                generation = {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"], "task_id": task_id, "raw_video": str(raw), "status": "ok"}
+            except VideoGenerationError as primary_error:
+                fallback = config.data["video"].get("fallback")
+                if not fallback:
+                    raise
+                raw = out / f"apimart-{names['media_stem']}-4s.mp4"
+                generation = generate_apimart_hook(master, motion_prompt, fallback, raw)
+                generation["fallback_from"] = config.data["video"]["provider_id"]
+                generation["attempts"] = [
+                    {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"], "status": "failed", "sanitized_error": str(primary_error)[:500]},
+                    {"provider_id": generation["provider_id"], "model_id": generation["model_id"], "status": "ok"},
+                ]
+        make_exact_hook(master, raw, hook, 4.0)
+        final_seconds = compose_v7(ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
+        _check_duration(final, final_seconds)
         items.append({
             "task_id": item["task_id"],
-            "generation_scope": "only poster image and first 3-second poster hook are generated; all later segments are reused local assets",
+            "generation_scope": "only poster image and 4-second poster hook are generated; all later segments are reused local assets",
             "sequence": sequence,
-            "generated_seconds": 3,
-            "reused_seconds": 9,
-            "middle_segment_policy": "3-9s is assembled from operation-class videos only",
+            "generated_seconds": 4,
+            "final_seconds": round(final_seconds, 3),
+            "middle_segment_policy": "operation-class videos play in full before CTA",
             "audio_policy": "APIMart-generated pt-BR CTA voice inventory only",
             "poster": str(poster),
             "master": str(master),
@@ -262,7 +276,7 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
             "motion_prompt": str(motion_path),
             "master_info": master_info,
             "components": rotations[item["task_id"]],
-            "dreamina": dreamina,
+            "video_generation": generation,
         })
     captions = _captions(run_dir, items)
     _write_json(phase_dir / "captions.json", captions)
@@ -271,9 +285,9 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         "status": "PHASE4_COMPLETE",
         "video_count": len(items),
         "generation_policy": {
-            "generated": "poster plus 3-second dynamic hook only",
-            "reused": "3-9s operation-class videos, CTA, music, and APIMart voice assets from repository inventory",
-            "final_seconds": 12,
+            "generated": "poster plus 4-second dynamic hook only",
+            "reused": "full operation-class videos and full motion CTA plus music and voice assets from repository inventory",
+            "final_seconds": "dynamic: 4-second hook + full selected operation clips + full selected CTA",
             "video_filename_rule": "prefix every video base name with 01, 02, 03... in manifest order",
         },
         "items": items,
@@ -574,7 +588,9 @@ def _component_pools(root: Path) -> dict[str, list[str]]:
     operation = sorted(str(path) for path in (root / "assets/video/operation").glob("*.mp4") if "master" not in path.name.lower())
     if len(operation) < 2:
         operation = sorted(str(path) for path in (root / "assets/video/operation").glob("*.mp4"))
-    cta = sorted(str(path) for path in (root / "assets/video/cta").glob("**/*") if path.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png"})
+    cta = sorted(str(path) for path in (root / "assets/video/cta").glob("**/*") if path.suffix.lower() == ".mp4")
+    if not cta:
+        cta = sorted(str(path) for path in (root / "assets/video/cta").glob("**/*") if path.suffix.lower() in {".jpg", ".jpeg", ".png"})
     music = sorted(str(path) for path in (root / "assets/audio/music").glob("*") if path.suffix.lower() in {".mp3", ".m4a", ".wav"})
     voice = sorted(str(path) for path in (root / "assets/audio/voiceover").glob("*apimart*.wav"))
     return {"operation": operation, "interface": operation, "cta": cta, "music": music, "voice": voice}
@@ -583,7 +599,7 @@ def _component_pools(root: Path) -> dict[str, list[str]]:
 def _motion_prompt(item: dict[str, Any], master: Path) -> str:
     return (
         f"Animate this exact 9:16 JaguarTV pre-match master for 4 seconds: {master.name}. "
-        "Keep the poster-cover composition visible as the dominant full-frame subject throughout the first 3 seconds; do not treat it as a single-frame flash. "
+        "Keep the poster-cover composition visible as the dominant full-frame subject throughout all 4 seconds; do not treat it as a single-frame flash. "
         "Preserve all Brazilian Portuguese text, player identity, club kit, crests, channel icons, date, kickoff time, prediction, and the upper-right JaguarTV logo. "
         "Do not add a second JaguarTV logo or any new brand wordmark; the only JaguarTV logo is already baked into the poster. "
         "Make the poster background visibly alive with stadium lights, crowd depth, sparks, cloth movement, and a fierce face-to-face player confrontation when two players are present. "
@@ -627,13 +643,13 @@ def _caption_for(run_dir: Path, item: dict[str, Any], fixtures: list[dict[str, A
             f"{fx['home_team']} x {fx['away_team']} ({fx['kickoff_at_brt']})"
             for fx in sorted(fixtures, key=lambda row: str(row.get("kickoff_at_brt", "")))
         )
-        hashtags = ["#futebol", "#brasileirao", "#palpites", "#tvaoVivo", "#jaguartvbrasil"]
+        hashtags = ["#futebol", "#brasileirao", "#palpites", "#jaguartv", "#iptv"]
         return {
             "task_id": item["task_id"],
             "title": f"Agenda de {weekday} na JaguarTV",
             "description": (
                 f"🗓️ Agenda de {weekday}: {rows}. 7 dias grátis no Jaguar TV, TV ao vivo no Android e TV Box! "
-                f"Baixa no jaguartvbrasil.com 📲 {' '.join(hashtags)}"
+                f"Acesse jaguartvbrasil.com/baixar-app para baixar. {' '.join(hashtags)}"
             ),
             "hashtags": hashtags,
         }
@@ -648,7 +664,7 @@ def _caption_for(run_dir: Path, item: dict[str, Any], fixtures: list[dict[str, A
     hook = f"🔥 É HOJE! {home} x {away} às {fx.get('kickoff_at_brt')}, {competition}."
     description = (
         f"{hook} Palpite JaguarTV: {score}. {tactical} "
-        f"Vem ver ao vivo no Jaguar TV 📺 7 dias grátis no jaguartvbrasil.com, Android e TV Box. "
+        "Vem ver ao vivo no Jaguar TV 📺 Acesse jaguartvbrasil.com/baixar-app para baixar. "
         f"{' '.join(hashtags)}"
     ).replace("  ", " ").strip()
     return {
@@ -660,14 +676,14 @@ def _caption_for(run_dir: Path, item: dict[str, Any], fixtures: list[dict[str, A
 
 
 def _hashtags(home: str, away: str, competition: str) -> list[str]:
-    tags = [f"#{_tag(home)}", f"#{_tag(away)}", f"#{_tag(competition)}", "#futebol", "#jaguartvbrasil"]
+    tags = [f"#{_tag(home)}", f"#{_tag(away)}", f"#{_tag(competition)}", "#jaguartv", "#iptv"]
     unique = []
     for tag in tags:
         if tag and tag not in unique:
             unique.append(tag)
     while len(unique) < 5:
-        unique.insert(-1, "#palpites")
-    return unique[:4] + ["#jaguartvbrasil"]
+        unique.insert(-2, "#palpites")
+    return unique[:3] + ["#jaguartv", "#iptv"]
 
 
 def _tag(value: str) -> str:

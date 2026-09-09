@@ -10,8 +10,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+import requests
 from PIL import Image, ImageFilter, ImageOps
 
+from .credentials import resolve_base_url, resolve_secret
 from .runtime import resolve_command
 
 
@@ -48,8 +50,8 @@ def video_filenames(poster_path: str | Path, source_seconds: int = 4, sequence: 
         "media_stem": stem,
         "master": f"master-{stem}-1080x1920.png",
         "raw_video": f"jimeng-{stem}-{source_seconds}s.mp4",
-        "hook": f"hook-{stem}-3s.mp4",
-        "final": f"final-{stem}-12s.mp4",
+        "hook": f"hook-{stem}-4s.mp4",
+        "final": f"final-{stem}.mp4",
         "cover": f"cover-{stem}-1080x1920.jpg",
     }
 
@@ -130,20 +132,20 @@ def make_vertical_master(poster: Path, output: Path) -> dict[str, Any]:
     }
 
 
-def make_exact_hook(master: Path, raw_motion: Path, output: Path) -> None:
+def make_exact_hook(master: Path, raw_motion: Path, output: Path, seconds: float = 4.0) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     if raw_motion.resolve() == output.resolve():
         raise VideoGenerationError(f"Raw Dreamina motion input and hook output are the same file: {output}")
     filter_graph = (
         "[0:v]scale=1080:1920,trim=duration=0.12,setpts=PTS-STARTPTS,fps=30[still];"
         "[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
-        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,trim=duration=2.88,"
+        f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,trim=duration={seconds - 0.12:.2f},"
         "setpts=PTS-STARTPTS,fps=30[motion];[still][motion]concat=n=2:v=1:a=0[outv]"
     )
     subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-i", str(master),
-            "-i", str(raw_motion), "-filter_complex", filter_graph, "-map", "[outv]", "-t", "3",
+            "-i", str(raw_motion), "-filter_complex", filter_graph, "-map", "[outv]", "-t", str(seconds),
             "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
             "-movflags", "+faststart", str(output),
         ],
@@ -160,7 +162,10 @@ def submit_dreamina_hook(master: Path, prompt: str, video_config: dict[str, Any]
         "--video_resolution", video_config.get("resolution", "720p"),
         "--model_version", video_config["model_id"], "--poll", "0",
     ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=180)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=180)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise VideoGenerationError(_sanitize(str(error))) from error
     if result.returncode != 0:
         raise VideoGenerationError(_sanitize(result.stderr or result.stdout))
     payload = _extract_json(result.stdout)
@@ -190,10 +195,13 @@ def download_dreamina_result(task_id: str, output_dir: Path, command_name: str =
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         known_files = set(output_dir.glob("*.mp4"))
-        result = subprocess.run(
-            [command_name, "query_result", "--submit_id", task_id, "--download_dir", str(output_dir)],
-            capture_output=True, text=True, check=False, timeout=120,
-        )
+        try:
+            result = subprocess.run(
+                [command_name, "query_result", "--submit_id", task_id, "--download_dir", str(output_dir)],
+                capture_output=True, text=True, check=False, timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise VideoGenerationError(_sanitize(str(error))) from error
         if result.returncode != 0:
             raise VideoGenerationError(_sanitize(result.stderr or result.stdout))
         candidates = _dreamina_raw_downloads(output_dir, task_id, known_files)
@@ -206,6 +214,97 @@ def download_dreamina_result(task_id: str, output_dir: Path, command_name: str =
     raise VideoGenerationError(f"Dreamina task {task_id} did not produce an MP4 within {timeout_seconds}s")
 
 
+def generate_apimart_hook(
+    master: Path,
+    prompt: str,
+    route: dict[str, Any],
+    output: Path,
+    *,
+    timeout_seconds: int = 900,
+    poll_interval: int = 5,
+) -> dict[str, Any]:
+    provider_id = str(route.get("provider_id") or "apimart")
+    model_id = str(route.get("model_id") or "wan2.6-i2v-flash")
+    base_url = resolve_base_url(route)
+    api_key = resolve_secret(route)
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        with master.open("rb") as image:
+            response = requests.post(
+                f"{base_url}/uploads/images",
+                headers=headers,
+                files={"file": (master.name, image, "image/png")},
+                timeout=120,
+            )
+        upload = _response_json(response, "image upload")
+        image_url = upload.get("url") or (upload.get("data") or {}).get("url")
+        if not image_url:
+            raise VideoGenerationError("APIMart image upload returned no URL")
+
+        response = requests.post(
+            f"{base_url}/videos/generations",
+            headers={**headers, "Content-Type": "application/json"},
+            json={
+                "model": model_id,
+                "prompt": prompt,
+                "image_urls": [image_url],
+                "resolution": route.get("resolution", "720p"),
+                "duration": int(route.get("generation_seconds", 4)),
+            },
+            timeout=120,
+        )
+        submission = _response_json(response, "video submission")
+        task_id = _apimart_task_id(submission)
+        if not task_id:
+            raise VideoGenerationError("APIMart video submission returned no task ID")
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            response = requests.get(f"{base_url}/tasks/{task_id}", headers=headers, timeout=60)
+            payload = _response_json(response, "task polling")
+            task = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+            status = str(task.get("status") or "").lower()
+            if status == "completed":
+                video_url = _apimart_video_url(task)
+                if not video_url:
+                    raise VideoGenerationError("APIMart task completed without a video URL")
+                download = requests.get(video_url, timeout=180)
+                if not download.ok or not download.content:
+                    raise VideoGenerationError(f"APIMart video download failed with HTTP {download.status_code}")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(download.content)
+                return {
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                    "task_id": task_id,
+                    "raw_video": str(output),
+                    "resolution": route.get("resolution", "720p"),
+                    "generation_seconds": int(route.get("generation_seconds", 4)),
+                    "status": "ok",
+                }
+            if status in {"failed", "cancelled", "error"}:
+                raise VideoGenerationError(f"APIMart task failed: status={status}")
+            time.sleep(poll_interval)
+        raise VideoGenerationError(f"APIMart task {task_id} did not complete within {timeout_seconds}s")
+    except (OSError, requests.RequestException, ValueError, TypeError) as error:
+        raise VideoGenerationError(_sanitize(str(error))) from error
+
+
+def media_duration(path: str | Path) -> float:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
+        capture_output=True, text=True, check=True, timeout=30,
+    )
+    return float(result.stdout.strip())
+
+
+def composition_duration(components: dict[str, str], hook_seconds: float = 4.0, static_cta_seconds: float = 3.0) -> float:
+    middle = media_duration(components["operation"]) + media_duration(components["interface"])
+    cta_path = Path(components["cta"])
+    cta = media_duration(cta_path) if cta_path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"} else static_cta_seconds
+    return hook_seconds + middle + cta
+
+
 def compose_v7(
     repository: Path,
     *,
@@ -213,13 +312,13 @@ def compose_v7(
     hook: Path,
     output: Path,
     components: dict[str, str],
-) -> None:
+) -> float:
     node = resolve_command("node")
     if not node:
         raise VideoGenerationError("Node.js runtime is unavailable")
     command = [
         node, str(repository / "scripts/compose-video.mjs"),
-        "--poster", str(master), "--hook-video", str(hook), "--poster-sec", "3",
+        "--poster", str(master), "--hook-video", str(hook), "--poster-sec", "4",
         "--modules", f"{components['operation']},{components['interface']}",
         "--cta", components["cta"], "--music", components["music"],
         "--voice", components["voice"], "--output", str(output),
@@ -227,6 +326,7 @@ def compose_v7(
     result = subprocess.run(command, cwd=repository, capture_output=True, text=True, check=False, timeout=900)
     if result.returncode != 0:
         raise VideoGenerationError(_sanitize(result.stderr or result.stdout or "compose-video failed"))
+    return composition_duration(components)
 
 
 def write_build_manifest(path: Path, payload: dict[str, Any]) -> None:
@@ -249,8 +349,43 @@ def _extract_json(output: str) -> dict[str, Any]:
         return {}
 
 
+def _response_json(response: requests.Response, operation: str) -> dict[str, Any]:
+    if not response.ok:
+        raise VideoGenerationError(f"APIMart {operation} failed with HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise VideoGenerationError(f"APIMart {operation} returned invalid JSON") from error
+    if not isinstance(payload, dict):
+        raise VideoGenerationError(f"APIMart {operation} returned an invalid response")
+    return payload
+
+
+def _apimart_task_id(payload: dict[str, Any]) -> str:
+    data = payload.get("data")
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return str(data[0].get("task_id") or data[0].get("id") or "")
+    if isinstance(data, dict):
+        return str(data.get("task_id") or data.get("id") or "")
+    return str(payload.get("task_id") or payload.get("id") or "")
+
+
+def _apimart_video_url(task: dict[str, Any]) -> str:
+    videos = (task.get("result") or {}).get("videos") or []
+    for video in videos:
+        urls = video.get("url") if isinstance(video, dict) else None
+        if isinstance(urls, str) and urls.startswith(("http://", "https://")):
+            return urls
+        if isinstance(urls, list):
+            value = next((str(url) for url in urls if str(url).startswith(("http://", "https://"))), "")
+            if value:
+                return value
+    return ""
+
+
 def _sanitize(message: str) -> str:
-    return " | ".join(line.strip() for line in message.splitlines() if line.strip())[-1000:]
+    safe = re.sub(r"sk-[A-Za-z0-9_.-]+", "[redacted]", message)
+    return " | ".join(line.strip() for line in safe.splitlines() if line.strip())[-1000:]
 
 
 def _safe(value: str) -> str:

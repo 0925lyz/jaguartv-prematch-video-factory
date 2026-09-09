@@ -23,6 +23,7 @@ def parser() -> argparse.ArgumentParser:
     collect.add_argument("--config", required=True, type=Path)
     collect.add_argument("--output", required=True, type=Path)
     collect.add_argument("--fixtures-file", type=Path)
+    collect.add_argument("--date", default="tomorrow")
 
     for name in ("phase1", "phase2", "phase3", "phase4", "phase5", "run"):
         command = commands.add_parser(name, help=f"Run {name} for the pre-match workflow")
@@ -57,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "collect":
         config = FactoryConfig.load(args.config)
         run_dir = args.output.parent if args.output.name == "phase1" else args.output
-        print(json.dumps(run_phase1(config, run_dir, args.fixtures_file), ensure_ascii=False))
+        print(json.dumps(run_phase1(config, run_dir, args.fixtures_file, args.date), ensure_ascii=False))
         return 0
 
     if args.command in {"phase1", "phase2", "phase3", "phase4", "phase5", "run"}:

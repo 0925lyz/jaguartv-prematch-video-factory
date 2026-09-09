@@ -21,6 +21,11 @@ VENV_PY="$REPO/.venv/bin/python"
 LOGDIR="$REPO/runs/automation-logs"
 mkdir -p "$LOGDIR"
 
+if ! "$VENV_PY" -c 'import sys' >/dev/null 2>&1; then
+  VENV_PY=/usr/bin/python3
+fi
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+
 # lark-cli lives in the managed node workspace; put managed node on PATH
 export PATH=/Users/jaguar/.workbuddy/binaries/node/versions/22.22.2-2/bin:$PATH
 
@@ -28,12 +33,26 @@ BATCH="${1:-auto}"; shift || true
 TS=$(date +%Y%m%d-%H%M%S)
 LOG="$LOGDIR/task1_B${BATCH}_${TS}.log"
 LOCKDIR="$REPO/runs/.task1-production.lock"
+LOCK_WAIT_SECONDS="${JAGUARTV_LOCK_WAIT_SECONDS:-21600}"
+LOCK_STARTED=$(date +%s)
 
-if ! mkdir "$LOCKDIR" 2>/dev/null; then
-  echo "[launcher] another task1 production is running; lock=$LOCKDIR" | tee -a "$LOG"
-  exit 75
-fi
-cleanup_lock() { rmdir "$LOCKDIR" 2>/dev/null || true; }
+while ! mkdir "$LOCKDIR" 2>/dev/null; do
+  LOCK_PID=$(cat "$LOCKDIR/pid" 2>/dev/null || true)
+  if [ -n "$LOCK_PID" ] && ! kill -0 "$LOCK_PID" 2>/dev/null; then
+    rm -f "$LOCKDIR/pid"
+    rmdir "$LOCKDIR" 2>/dev/null || true
+    continue
+  fi
+  LOCK_ELAPSED=$(( $(date +%s) - LOCK_STARTED ))
+  if [ "$LOCK_ELAPSED" -ge "$LOCK_WAIT_SECONDS" ]; then
+    echo "[launcher] timed out waiting for production lock after ${LOCK_ELAPSED}s; lock=$LOCKDIR" | tee -a "$LOG"
+    exit 75
+  fi
+  echo "[launcher] another batch is running; waiting for lock=$LOCKDIR" | tee -a "$LOG"
+  sleep 30
+done
+echo "$$" > "$LOCKDIR/pid"
+cleanup_lock() { rm -f "$LOCKDIR/pid"; rmdir "$LOCKDIR" 2>/dev/null || true; }
 trap cleanup_lock EXIT INT TERM
 
 echo "[launcher $(date -u +%FT%TZ)] batch=$BATCH log=$LOG" | tee -a "$LOG"

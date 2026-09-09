@@ -1,7 +1,7 @@
 {
   "timezone": "America/Sao_Paulo",
   "collector": {
-    "base_url": "http://127.0.0.1:8787/api/v1/fixtures",
+    "base_url": "https://copa.jarg.top/api/save-agenda?dedup=true",
     "api_key_env": "FIXTURE_COLLECTOR_API_KEY",
     "timeout_seconds": 30
   },
@@ -33,7 +33,17 @@
     "model_id": "seedance2.0fast_vip",
     "resolution": "720p",
     "generation_seconds": 4,
-    "dreamina_command": "dreamina"
+    "dreamina_command": "dreamina",
+    "fallback": {
+      "provider_id": "apimart",
+      "model_id": "wan2.6-i2v-flash",
+      "base_url": "https://api.apimart.ai/v1",
+      "base_url_env": "APIMART_VIDEO_BASE_URL",
+      "api_key_env": "APIMART_API_KEY",
+      "keychain_service": "APIMART_API_KEY",
+      "resolution": "720p",
+      "generation_seconds": 4
+    }
   },
   "publishing": {
     "inventory_label": "赛前预测",

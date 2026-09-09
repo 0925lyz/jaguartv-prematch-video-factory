@@ -44,6 +44,15 @@ class FactoryConfig:
         if data["publishing"].get("inventory_label") != "赛前预测":
             raise ConfigurationError("Publishing inventory label must be exactly 赛前预测")
 
+        video = data["video"]
+        if int(video.get("generation_seconds", 0)) != 4:
+            raise ConfigurationError("The generated poster hook must be exactly 4 seconds")
+        fallback = video.get("fallback") or {}
+        if fallback.get("provider_id") != "apimart" or fallback.get("model_id") != "wan2.6-i2v-flash":
+            raise ConfigurationError("Video fallback must be APIMart wan2.6-i2v-flash")
+        if fallback.get("resolution") != "720p" or int(fallback.get("generation_seconds", 0)) != 4:
+            raise ConfigurationError("APIMart video fallback must use 720p and duration 4")
+
     def env_value(self, section: dict[str, Any], field: str, *, required: bool = True) -> str:
         env_name = str(section.get(field))
         if not env_name:

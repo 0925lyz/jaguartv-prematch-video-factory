@@ -23,7 +23,7 @@ class Check:
 
 def run_preflight(config: FactoryConfig, repository: Path) -> dict[str, Any]:
     checks: list[Check] = []
-    for command in ("codex", "agent-reach", "ffmpeg", "ffprobe", "node", "dreamina"):
+    for command in ("codex", "agent-reach", "ffmpeg", "ffprobe", "node"):
         resolved = resolve_command(command)
         checks.append(Check(command, "ok" if resolved else "failed", resolved or "command not found"))
 
@@ -50,10 +50,18 @@ def run_preflight(config: FactoryConfig, repository: Path) -> dict[str, Any]:
         checks.append(Check(f"image_{route_name}", "ok" if configured else "blocked",
                             route_config["provider_id"]))
 
-    dreamina = _run_json(["dreamina", "user_credit"], timeout=60)
+    dreamina_command = resolve_command(config.data["video"].get("dreamina_command", "dreamina"))
+    dreamina = _run_json([dreamina_command, "user_credit"], timeout=60) if dreamina_command else {}
     tier = str(dreamina.get("vip_level", "")).strip()
     checks.append(Check("dreamina_vip_session", "ok" if tier else "blocked",
                         f"authenticated VIP tier: {tier}" if tier else "VIP session not verified"))
+    video_fallback = config.data["video"]["fallback"]
+    try:
+        fallback_ok = _image_capability(video_fallback, video_fallback["model_id"])
+    except Exception:
+        fallback_ok = False
+    checks.append(Check("video_fallback", "ok" if fallback_ok else "blocked",
+                        f"{video_fallback['provider_id']}:{video_fallback['model_id']}"))
 
     required_assets = [
         repository / "assets/brand/jaguartv-logo.png",
@@ -64,10 +72,12 @@ def run_preflight(config: FactoryConfig, repository: Path) -> dict[str, Any]:
     for asset in required_assets:
         checks.append(Check(f"asset:{asset.name}", "ok" if asset.is_file() else "failed", str(asset)))
 
+    required_checks = [check for check in checks if check.name not in {"dreamina_vip_session", "video_fallback"}]
+    video_ready = tier or fallback_ok
     report = {
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "checks": [asdict(check) for check in checks],
-        "production_ready": all(check.status in {"ok", "configured"} for check in checks),
+        "production_ready": bool(video_ready) and all(check.status in {"ok", "configured"} for check in required_checks),
     }
     return report
 

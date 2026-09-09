@@ -16,12 +16,12 @@ not modify or vendor the separate video-creation-automation repository.
    primary/fallback route and records the route actually used.
 5. Poster jobs fail closed when current licensed player, crest, kit, channel-icon, or logo assets
    are missing. Schedule posters contain at most eight fixtures per page.
-6. Video jobs generate only the poster image and the first 3-second dynamic poster hook.
-   Jimeng may create a 3-4 second raw poster clip, which is trimmed into the hook. The
-   3-9s middle section is assembled from two distinct operation-class videos, then the
-   9-12s tail uses an existing CTA asset. Music is reused from inventory; CTA voice must
-   come from the reusable APIMart-generated pt-BR voice inventory. Component rotation is
-   deterministic by Brasilia date plus fixture ID.
+6. Video jobs generate only the poster image and an exact 4-second dynamic poster hook.
+   Dreamina/Jimeng VIP Seedance is primary; APIMart `wan2.6-i2v-flash` at 720p/4s is the
+   recorded fallback. The middle section plays two distinct operation-class videos in full,
+   followed by the selected motion CTA in full. Final duration is therefore dynamic. Music is
+   reused from inventory; CTA voice comes from the reusable pt-BR voice inventory. Component
+   rotation is deterministic by Brasilia date plus fixture ID.
 7. Upload is a separate final gate. Only validated packages are sent to Pending Review under
    `赛前预测`; the pipeline never approves or publishes them.
 
@@ -40,5 +40,5 @@ not modify or vendor the separate video-creation-automation repository.
 
 Every failed phase reports the operation, provider or file, sanitized error, attempted checks,
 last verified artifact, and then stops. No provider substitution occurs outside the explicitly
-configured text and Image2 fallback chains. Secrets are read from environment variables or the
+configured text, Image2, and video fallback chains. Secrets are read from environment variables or the
 operator's existing authenticated tools and are excluded from manifests and logs.

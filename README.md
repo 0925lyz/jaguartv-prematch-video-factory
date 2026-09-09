@@ -10,9 +10,10 @@ untouched.
 - Featured-match selection with current Brazilian-player membership gating.
 - Provider-safe DeepSeek text routing with a recorded fallback.
 - Independent primary/fallback Image2 configuration.
-- Dreamina/Jimeng VIP plus Seedance V7 video contract.
-- Video generation is scoped to the poster hook only; 3-9s uses two distinct operation-class
-  videos, and CTA audio uses reusable authorized pt-BR voice inventory.
+- Dreamina/Jimeng VIP Seedance video generation with an explicit APIMart
+  `wan2.6-i2v-flash` 720p/4s fallback.
+- Video generation is scoped to the 4-second poster hook only. Two distinct operation-class
+  videos and the selected motion CTA then play in full, so final duration is content-driven.
 - SHA-256-deduplicated poster, operation-clip, and CTA delivery builder.
 - Tests for timezone, selection rules, and provider/model rejection.
 - Prompt contracts and a research-evidence schema that fail closed on uncertain player assets.
@@ -44,8 +45,11 @@ Run the complete Task 1 workflow through the canonical WorkBuddy/Codex entrypoin
 research evidence or external integrations are unavailable.
 
 ```bash
-scripts/task1_launcher.sh auto
-scripts/task1_launcher.sh auto --dry-run --fixtures-file examples/manual-fixtures.example.json
+scripts/task1_launcher.sh 1
+scripts/task1_launcher.sh 2
+scripts/task1_launcher.sh 3
+scripts/task1_launcher.sh 1 --date today
+scripts/task1_launcher.sh 1 --dry-run --fixtures-file examples/manual-fixtures.example.json
 scripts/task1_launcher.sh 3 --skip-collect   # force a third same-day version from existing phase1/phase2
 ```
 
@@ -69,6 +73,6 @@ See [docs/architecture.md](docs/architecture.md) for pipeline boundaries and pro
 
 Run `preflight` before every production date. A blocked image route or unavailable research
 backend is a stop condition, not permission to generate placeholders. Production runs retain the
-fixture payload, research evidence, prompt, provider route records, image QA, Jimeng task ID,
+fixture payload, research evidence, prompt, provider route records, image QA, video task ID,
 component rotation, captions, build manifest, upload ID, and server verification result under one
 date-scoped run directory.

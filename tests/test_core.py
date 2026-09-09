@@ -2,11 +2,12 @@ import json
 import http.client
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from jaguartv_prematch.collector import tomorrow_brasilia
+from jaguartv_prematch.collector import collect_fixtures, resolve_target_date, tomorrow_brasilia
 from jaguartv_prematch.config import FactoryConfig
 from jaguartv_prematch.image2 import _download_image_url
 from jaguartv_prematch.pipeline import _caption_for, run_phase1, run_phase3
@@ -14,7 +15,15 @@ from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexDeepSeekRouter, ProviderRoutingError
 from jaguartv_prematch.selection import selection_reason
 from jaguartv_prematch.upload import _validated_base_url
-from jaguartv_prematch.video import _dreamina_raw_downloads, deterministic_batch_rotation, video_filenames
+from jaguartv_prematch.video import (
+    VideoGenerationError,
+    _dreamina_raw_downloads,
+    composition_duration,
+    deterministic_batch_rotation,
+    generate_apimart_hook,
+    submit_dreamina_hook,
+    video_filenames,
+)
 
 import importlib.util
 
@@ -47,6 +56,82 @@ def fixture(**overrides):
 def test_tomorrow_uses_brasilia_calendar_date():
     now = datetime(2026, 9, 2, 23, 30, tzinfo=ZoneInfo("America/Sao_Paulo"))
     assert tomorrow_brasilia(now) == "2026-09-03"
+
+
+def test_target_date_honors_explicit_today():
+    now = datetime(2026, 9, 8, 23, 30, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    assert resolve_target_date("today", now) == "2026-09-08"
+    assert resolve_target_date("tomorrow", now) == "2026-09-09"
+
+
+def test_official_agenda_filters_exact_target_date(monkeypatch):
+    payload = {
+        "success": True,
+        "matches": [
+            {
+                "id": "old",
+                "homeTeam": "Old Home",
+                "awayTeam": "Old Away",
+                "date": "08/09",
+                "time": "19:00",
+                "league": "Premier League",
+                "channel": "Jaguar TV",
+                "isVisible": True,
+            },
+            {
+                "id": "target",
+                "homeTeam": "Barcelona",
+                "awayTeam": "Valencia",
+                "date": "09/09",
+                "time": "21:30",
+                "league": "La Liga",
+                "channels": ["Jaguar TV 1", "ESPN"],
+                "isVisible": True,
+            },
+        ],
+    }
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    monkeypatch.setattr("jaguartv_prematch.collector.urllib.request.urlopen", lambda request, timeout: Response())
+
+    fixtures, _ = collect_fixtures("https://copa.jarg.top/api/save-agenda?dedup=true", date="20260909")
+
+    assert [fixture.fixture_id for fixture in fixtures] == ["target"]
+    assert fixtures[0].schedule_date == "2026-09-09"
+    assert fixtures[0].home_team == "Barcelona"
+    assert fixtures[0].channels == ("Jaguar TV 1", "ESPN")
+    assert fixtures[0].featured is True
+
+
+def test_driver_passes_run_date_to_collect(monkeypatch, tmp_path):
+    run_dir = tmp_path / "runs" / "20260909_batch1"
+    phase1 = run_dir / "phase1"
+    phase1.mkdir(parents=True)
+    phase1.joinpath("selected-fixtures.json").write_text(
+        json.dumps({"fixtures": [fixture(schedule_date="2026-09-09").to_dict()]}),
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(task1_driver, "_run", fake_run)
+    config = SimpleNamespace(path=tmp_path / "config.json")
+
+    task1_driver._phase1(config, run_dir, False, False)
+
+    assert seen["cmd"][seen["cmd"].index("--date") + 1] == "2026-09-09"
 
 
 def test_major_league_requires_verified_current_brazilian_player():
@@ -112,6 +197,8 @@ def test_video_filenames_use_manifest_sequence_prefix():
     names = video_filenames("桑托斯_vs_帕尔梅拉斯_260923_海报.png", 4, 2)
     assert names["media_stem"].startswith("02桑托斯_vs_帕尔梅拉斯_260923_海报")
     assert names["final"].startswith("final-02桑托斯_vs_帕尔梅拉斯_260923_海报")
+    assert names["hook"].endswith("-4s.mp4")
+    assert "12s" not in names["final"]
 
 
 def test_dreamina_download_selection_ignores_hook_and_final_outputs(tmp_path):
@@ -229,6 +316,9 @@ def test_captions_change_between_batches(tmp_path):
     assert batch1 != batch2
     assert "Santos x Palmeiras" in batch1
     assert "Santos x Palmeiras" in batch2
+    assert "Acesse jaguartvbrasil.com/baixar-app para baixar." in batch1
+    assert "#jaguartv" in batch1
+    assert "#iptv" in batch1
 
 
 def test_caption_has_exactly_five_hashtags_with_marketing(tmp_path):
@@ -243,9 +333,74 @@ def test_caption_has_exactly_five_hashtags_with_marketing(tmp_path):
     caption = _caption_for(run_dir, {"task_id": "fixture-1"}, [fx], "2026-09-03")
     hashtags = caption["hashtags"]
     assert len(hashtags) == 5
-    assert hashtags[-1] == "#jaguartvbrasil"
+    assert "#jaguartv" in hashtags
+    assert "#iptv" in hashtags
     assert "Jaguar TV" in caption["description"]
-    assert "jaguartvbrasil.com" in caption["description"]
+    assert "Acesse jaguartvbrasil.com/baixar-app para baixar." in caption["description"]
+
+
+def test_composition_duration_uses_full_video_lengths(monkeypatch):
+    durations = {"operation.mp4": 3.0, "interface.mp4": 6.0, "cta.mp4": 4.5}
+    monkeypatch.setattr("jaguartv_prematch.video.media_duration", lambda path: durations[Path(path).name])
+    components = {"operation": "operation.mp4", "interface": "interface.mp4", "cta": "cta.mp4"}
+    assert composition_duration(components) == 17.5
+
+
+def test_missing_dreamina_command_becomes_provider_error(monkeypatch, tmp_path):
+    monkeypatch.setattr("jaguartv_prematch.video.subprocess.run", lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("dreamina")))
+    with pytest.raises(VideoGenerationError):
+        submit_dreamina_hook(tmp_path / "master.png", "prompt", {"model_id": "seedance", "generation_seconds": 4})
+
+
+def test_apimart_hook_uses_required_model_parameters(monkeypatch, tmp_path):
+    class Response:
+        def __init__(self, payload=None, content=b"", status=200):
+            self.payload = payload or {}
+            self.content = content
+            self.status_code = status
+            self.ok = 200 <= status < 300
+
+        def json(self):
+            return self.payload
+
+    submitted = {}
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/uploads/images"):
+            return Response({"url": "https://upload.example/master.png"})
+        submitted.update(kwargs["json"])
+        return Response({"data": [{"task_id": "task-1"}]})
+
+    def fake_get(url, **kwargs):
+        if "/tasks/" in url:
+            return Response({"data": {"status": "completed", "result": {"videos": [{"url": ["https://cdn.example/hook.mp4"]}]}}})
+        return Response(content=b"mp4")
+
+    monkeypatch.setattr("jaguartv_prematch.video.resolve_secret", lambda route: "secret")
+    monkeypatch.setattr("jaguartv_prematch.video.requests.post", fake_post)
+    monkeypatch.setattr("jaguartv_prematch.video.requests.get", fake_get)
+    master = tmp_path / "master.png"
+    master.write_bytes(b"png")
+    output = tmp_path / "hook.mp4"
+    route = {
+        "provider_id": "apimart",
+        "model_id": "wan2.6-i2v-flash",
+        "base_url": "https://api.apimart.ai/v1",
+        "resolution": "720p",
+        "generation_seconds": 4,
+    }
+
+    result = generate_apimart_hook(master, "animate", route, output)
+
+    assert output.read_bytes() == b"mp4"
+    assert submitted == {
+        "model": "wan2.6-i2v-flash",
+        "prompt": "animate",
+        "image_urls": ["https://upload.example/master.png"],
+        "resolution": "720p",
+        "duration": 4,
+    }
+    assert result["provider_id"] == "apimart"
 
 
 def test_upload_url_rejects_embedded_credentials():

@@ -6,7 +6,7 @@ import process from "node:process";
 import { tmpdir } from "node:os";
 
 const ROOT = path.resolve(process.cwd());
-const CTA_SEC = 3;
+const STATIC_CTA_SEC = 3;
 
 function parseArgs(argv) {
   const o = {};
@@ -25,10 +25,13 @@ function ffmpeg(args, opts = {}) {
 function visualClip(input, output, duration, isImage) {
   const args = [];
   if (isImage) args.push("-loop", "1");
-  else args.push("-stream_loop", "-1");
   args.push("-i", input, "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black", "-an");
   args.push("-t", String(duration), "-r", "30", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", output);
   ffmpeg(args);
+}
+
+function mediaDuration(input) {
+  return Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", input], { encoding: "utf8" }).trim());
 }
 
 const opts = parseArgs(process.argv.slice(2));
@@ -56,7 +59,7 @@ if (randomBefore.length) {
   console.log(`[随机中段] ${path.basename(picked)}`);
 }
 const output = path.resolve(opts.output);
-const POSTER_SEC = Number(opts["poster-sec"]) || 3;
+const POSTER_SEC = Number(opts["poster-sec"]) || 4;
 for (const [label, p] of [["poster", poster], ["cta", cta], ...midModules.map((m, i) => [`module${i}`, m])]) {
   if (!existsSync(p)) throw new Error(`${label} not found: ${p}`);
 }
@@ -66,8 +69,10 @@ if (voice && !existsSync(voice)) throw new Error(`voice not found: ${voice}`);
 
 // CTA may be a static image (default) or an animated video clip (e.g. motion CTA from lyz/cta).
 const ctaIsImage = !/\.(mp4|mov|webm|mkv)$/i.test(cta);
-const middleSec = midModules.length * 3;
-const total = POSTER_SEC + middleSec + CTA_SEC;
+const middleDurations = midModules.map(mediaDuration);
+const middleSec = middleDurations.reduce((sum, seconds) => sum + seconds, 0);
+const ctaSec = ctaIsImage ? STATIC_CTA_SEC : mediaDuration(cta);
+const total = POSTER_SEC + middleSec + ctaSec;
 const ctaStart = POSTER_SEC + middleSec;
 const keypad = !!opts.keypad || /downloader/i.test(path.basename(midModules[0] || ""));
 const work = mkdtempSync(path.join(tmpdir(), "jaguartv-compose-"));
@@ -82,11 +87,11 @@ try {
   const files = [posterClip];
   midModules.forEach((m, i) => {
     const clip = path.join(work, `module-${i}.mp4`);
-    visualClip(m, clip, 3, false);
+    visualClip(m, clip, middleDurations[i], false);
     files.push(clip);
   });
   const ctaClip = path.join(work, "cta.mp4");
-  visualClip(cta, ctaClip, CTA_SEC, ctaIsImage);
+  visualClip(cta, ctaClip, ctaSec, ctaIsImage);
   files.push(ctaClip);
 
   writeFileSync(concatList, files.map((f) => `file '${f.replaceAll("'", "'\\''")}'`).join("\n") + "\n");
@@ -107,14 +112,14 @@ try {
     let inputsN = 1;
     if (keypad) {
       inputs.push("-f", "lavfi", "-i", `aevalsrc=${kpExpr}:s=48000:d=${kpDur}`);
-      filters.push(`[${nextIdx}:a]adelay=3200|3200,volume=0.85[kp]`);
+      filters.push(`[${nextIdx}:a]adelay=${Math.round((POSTER_SEC + 0.2) * 1000)}|${Math.round((POSTER_SEC + 0.2) * 1000)},volume=0.85[kp]`);
       amixIn += `[kp]`;
       inputsN += 1;
       nextIdx += 1;
     }
     if (hasVoice) {
       inputs.push("-i", voice);
-      filters.push(`[${nextIdx}:a]atrim=0:4,asetpts=N/SR/TB,adelay=${Math.round(ctaStart * 1000)}:all=1,volume=1.15[vo]`);
+      filters.push(`[${nextIdx}:a]atrim=0:${ctaSec},asetpts=N/SR/TB,adelay=${Math.round(ctaStart * 1000)}:all=1,volume=1.15[vo]`);
       amixIn += `[vo]`;
       inputsN += 1;
     }
