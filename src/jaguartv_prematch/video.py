@@ -240,6 +240,10 @@ def generate_apimart_hook(
         image_url = upload.get("url") or (upload.get("data") or {}).get("url")
         if not image_url:
             raise VideoGenerationError("APIMart image upload returned no URL")
+        # APIMart rejects reference image URLs that contain unescaped whitespace
+        # ("encode spaces as %20"). Our poster-derived file names legitimately contain
+        # spaces, and the upload response mirrors that name into the URL, so encode it.
+        image_url = requests.utils.requote_uri(str(image_url))
 
         response = requests.post(
             f"{base_url}/videos/generations",
