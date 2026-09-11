@@ -4,6 +4,7 @@ import base64
 import http.client
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -65,6 +66,7 @@ def generate_image2(
                     output.write_bytes(_download_image_url(image["url"], timeout))
                 else:
                     raise RuntimeError("Image provider returned no image data")
+                _verify_requested_size(output, image_config.get("size", "1024x1280"))
                 attempts.append(ProviderUse(provider_id, model_id, started, _now(), "ok",
                                             fallback_from=image_config["primary"]["provider_id"] if index else None))
                 return attempts
@@ -82,6 +84,34 @@ def generate_image2(
 def save_image_route_manifest(path: Path, attempts: list[ProviderUse]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps([asdict(item) for item in attempts], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _verify_requested_size(output: Path, requested: str, tolerance: float = 0.02) -> None:
+    """Reject a poster whose aspect ratio does not match the requested size.
+
+    Image2 providers sometimes ignore ``size`` and return an arbitrary canvas — one
+    fallback run returned 793x1983 (2:5) for a 4:5 request, which then shipped as an
+    off-spec poster. Raising here marks the attempt as failed so the retry loop can
+    re-request it instead of silently saving the wrong aspect ratio.
+    """
+    match = re.match(r"^\s*(\d+)\s*x\s*(\d+)\s*$", str(requested))
+    if not match:
+        return
+    want_w, want_h = int(match.group(1)), int(match.group(2))
+    if want_w <= 0 or want_h <= 0:
+        return
+    from PIL import Image
+
+    with Image.open(output) as image:
+        got_w, got_h = image.size
+    if got_w <= 0 or got_h <= 0:
+        raise RuntimeError(f"image provider returned an empty canvas ({got_w}x{got_h})")
+    want_ratio = want_w / want_h
+    got_ratio = got_w / got_h
+    if abs(got_ratio - want_ratio) / want_ratio > tolerance:
+        raise RuntimeError(
+            f"image provider returned {got_w}x{got_h} for the requested {want_w}x{want_h} canvas"
+        )
 
 
 def _sanitize(error: Exception) -> str:

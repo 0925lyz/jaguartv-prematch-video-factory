@@ -9,7 +9,7 @@ import pytest
 
 from jaguartv_prematch.collector import collect_fixtures, resolve_target_date, tomorrow_brasilia
 from jaguartv_prematch.config import FactoryConfig
-from jaguartv_prematch.image2 import _download_image_url
+from jaguartv_prematch.image2 import _download_image_url, _verify_requested_size
 from jaguartv_prematch.pipeline import _caption_for, run_phase1, run_phase3
 from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexDeepSeekRouter, ProviderRoutingError
@@ -484,6 +484,25 @@ def test_phase3_dry_run_creates_4x5_posters(tmp_path):
     from PIL import Image
     with Image.open(result["items"][0]["poster"]) as poster:
         assert poster.size == (1024, 1280)
+
+
+def test_image_size_guard_rejects_wrong_aspect_ratio(tmp_path):
+    from PIL import Image
+
+    poster = tmp_path / "wrong.png"
+    Image.new("RGB", (793, 1983), (0, 0, 0)).save(poster)
+
+    with pytest.raises(RuntimeError, match="793x1983"):
+        _verify_requested_size(poster, "1024x1280")
+
+
+def test_image_size_guard_accepts_4x5_canvases(tmp_path):
+    from PIL import Image
+
+    for size in ((1024, 1280), (1122, 1402)):
+        poster = tmp_path / f"ok-{size[0]}.png"
+        Image.new("RGB", size, (0, 0, 0)).save(poster)
+        _verify_requested_size(poster, "1024x1280")
 
 
 def test_schedule_channel_band_stays_compact_for_a_single_match(tmp_path):
