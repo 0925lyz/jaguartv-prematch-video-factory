@@ -10,7 +10,7 @@ import pytest
 from jaguartv_prematch.collector import collect_fixtures, resolve_target_date, tomorrow_brasilia
 from jaguartv_prematch.config import FactoryConfig
 from jaguartv_prematch.image2 import _download_image_url, _verify_requested_size
-from jaguartv_prematch.pipeline import _caption_for, run_phase1, run_phase3
+from jaguartv_prematch.pipeline import _caption_for, _predicted_score, run_phase1, run_phase3
 from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexDeepSeekRouter, ProviderRoutingError
 from jaguartv_prematch.selection import selection_reason
@@ -392,6 +392,30 @@ def test_captions_change_between_batches(tmp_path):
     assert "Acesse jaguartvbrasil.com/baixar-app para baixar." in batch1
     assert "#jaguartv" in batch1
     assert "#iptv" in batch1
+
+
+def test_predicted_score_line_keeps_the_away_team(tmp_path):
+    run_dir = tmp_path / "20260911_batch9"
+    phase2 = run_dir / "phase2"
+    phase2.mkdir(parents=True)
+    phase2.joinpath("fixture-1_research.json").write_text(
+        json.dumps({"projected_or_inferred": [{"claim_pt": "Coritiba 1 x 1 Athletico Paranaense"}]},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert _predicted_score(run_dir, "fixture-1") == "Coritiba 1 x 1 Athletico Paranaense"
+
+
+def test_predicted_score_line_tolerates_a_claim_without_the_away_team(tmp_path):
+    run_dir = tmp_path / "20260911_batch9"
+    phase2 = run_dir / "phase2"
+    phase2.mkdir(parents=True)
+    phase2.joinpath("fixture-1_research.json").write_text(
+        json.dumps({"projected_or_inferred": [{"claim": "Editorial prediction: Santos 1 x 2"}]},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert _predicted_score(run_dir, "fixture-1") == "Santos 1 x 2"
 
 
 def test_caption_has_exactly_five_hashtags_with_marketing(tmp_path):

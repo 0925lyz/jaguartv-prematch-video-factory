@@ -717,11 +717,23 @@ def _tag(value: str) -> str:
 
 
 def _predicted_score(run_dir: Path, task_id: str) -> str:
+    """Render the projected score line as "Home 1 x 1 Away".
+
+    Only the home side and the two digits used to survive, so every published caption read
+    "Palpite JaguarTV: Coritiba 1 x 1." -- a truncated scoreline that never named the away
+    team. The trailing team name is captured too, with a fallback for claims that stop at the
+    digits.
+    """
     claim = _projected_claim(run_dir, task_id, 0)
-    found = re.search(r"([A-Za-zÀ-ÿ][\wÀ-ÿ .'-]*?)\s+(\d)\s*[xX]\s*(\d)", claim)
+    found = re.search(
+        r"([A-Za-zÀ-ÿ][\wÀ-ÿ .'-]*?)\s+(\d)\s*[xX]\s*(\d)\s*([A-Za-zÀ-ÿ][\wÀ-ÿ .'-]*)?",
+        claim,
+    )
     if not found:
         return f"{claim}" if claim else "jogo aberto, decisão nos detalhes"
-    return f"{found.group(1).strip()} {found.group(2)} x {found.group(3)}"
+    line = f"{found.group(1).strip()} {found.group(2)} x {found.group(3)}"
+    away = (found.group(4) or "").strip()
+    return f"{line} {away}".strip()
 
 
 def _tactical_point(run_dir: Path, task_id: str) -> str:
