@@ -477,7 +477,9 @@ def _natural_fill_box(image: Image.Image, box: list[int]) -> None:
     image.paste(patch, (x0, y0))
 
 
-# Channel-brand asset lookup: fixture channel names -> file stems in assets/channels/
+# Channel-brand asset lookup: fixture channel names -> file stems in assets/channels/.
+# Only labels whose stem does NOT match the asset file stem need an entry here; plain
+# single-word labels (TNT, RECORD, SBT, ESPN, ...) already resolve through the fallback.
 _CHANNEL_ALIASES: dict[str, list[str]] = {
     "PRIME VIDEO": ["Prime_Video"],
     "PRIMEVIDEO": ["Prime_Video"],
@@ -490,6 +492,23 @@ _CHANNEL_ALIASES: dict[str, list[str]] = {
     "GLOBO": ["TV_Globo"],
     "GLOBO/SPORTV/PREMIERE/PRIME VIDEO": ["TV_Globo", "SporTV", "Premiere", "Prime_Video"],
     "XSPORTS/YOUTUBE": ["XSports", "YouTube"],
+    "DISNEY+": ["Disney_Plus"],
+    "DISNEY +": ["Disney_Plus"],
+    "DISNEY PLUS": ["Disney_Plus"],
+    "HBO MAX": ["HBO_Max"],
+    "HBO": ["HBO_Max"],
+    "CANAL GOAT": ["Canal_GOAT"],
+    "GOAT": ["Canal_GOAT"],
+    "ONE FOOTBALL PPV": ["OneFootball_PPV"],
+    "PPV ONEFOOTBALL": ["OneFootball_PPV"],
+    "ONEFOOTBALL": ["OneFootball_PPV"],
+    "APPLE TV": ["Apple_TV"],
+    "GE TV": ["Ge_TV"],
+    "CAZÉTV": ["CazeTV"],
+    "CAZETV": ["CazeTV"],
+    "CAZÉ TV": ["CazeTV"],
+    "CAZE TV": ["CazeTV"],
+    "TV CULTURA": ["TV_Cultura"],
 }
 
 
@@ -527,7 +546,12 @@ def _apply_schedule_channel_logos(
     band_bottom = round(height * 0.92)
     band_height = band_bottom - band_top
     row_count = max(1, len(sorted_fixtures))
-    row_h = band_height // row_count
+    # The agenda body spans y 30%-92% of the poster. Image2 spreads N rows across that body,
+    # but a short agenda stays compact instead of stretching, so dividing the whole body by
+    # row_count painted one oversized dark rectangle (covering 62% of the poster) whenever a
+    # day had only 1-3 fixtures. Cap the row height at a quarter of the body — i.e. behave as
+    # if at least 4 rows were present; agendas with 4+ rows keep the original geometry.
+    row_h = min(band_height // row_count, band_height // 4)
     mask_color = (10, 18, 30, 235)
     mask_draw = ImageDraw.Draw(image)
     placements: list[dict[str, Any]] = []

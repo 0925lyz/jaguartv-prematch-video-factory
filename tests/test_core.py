@@ -144,6 +144,20 @@ def test_target_club_is_selected():
     assert selection_reason(fixture(home_team="Manchester City")) == "target_club"
 
 
+def test_high_value_competitions_are_selected_by_api_football_names():
+    assert selection_reason(fixture(competition="UEFA Champions League - League Stage - 1")) == "target_competition"
+    assert selection_reason(fixture(competition="CONMEBOL Libertadores - Quarter-finals")) == "target_competition"
+    assert selection_reason(fixture(competition="CONMEBOL Sudamericana - Quarter-finals")) == "target_competition"
+    assert selection_reason(fixture(competition="Serie B - Regular Season - 27")) == "target_competition"
+    assert selection_reason(fixture(competition="Serie A - Regular Season - 27")) == "target_competition"
+
+
+def test_unrelated_competitions_still_fall_through():
+    assert selection_reason(fixture(competition="Liga Pro Serie B - Promotion Group - 3")) is None
+    assert selection_reason(fixture(competition="Capixaba B - Semi-finals")) is None
+    assert selection_reason(fixture(competition="2. Bundesliga - Regular Season - 5")) is None
+
+
 def test_non_featured_match_is_rejected():
     assert selection_reason(fixture(featured=False, home_team="Manchester City")) is None
 
@@ -470,3 +484,41 @@ def test_phase3_dry_run_creates_4x5_posters(tmp_path):
     from PIL import Image
     with Image.open(result["items"][0]["poster"]) as poster:
         assert poster.size == (1024, 1280)
+
+
+def test_schedule_channel_band_stays_compact_for_a_single_match(tmp_path):
+    """A one-match agenda must not paint the channel mask over most of the poster."""
+    from PIL import Image
+
+    from jaguartv_prematch.pipeline import ROOT, _apply_schedule_channel_logos
+
+    poster = tmp_path / "schedule.png"
+    Image.new("RGB", (1000, 1250), (255, 255, 255)).save(poster)
+    fixtures = [{"fixture_id": "f-1", "kickoff_at_brt": "21:30", "channels": ["ESPN"]}]
+
+    _apply_schedule_channel_logos(poster, fixtures, ROOT / "assets" / "channels")
+
+    with Image.open(poster) as image:
+        band_left = round(image.width * 0.79)
+        # y=80% used to sit inside the oversized single-row mask; it must stay untouched now.
+        assert image.convert("RGB").getpixel((band_left + 8, round(image.height * 0.80))) == (255, 255, 255)
+
+
+def test_schedule_channel_band_still_covers_a_full_agenda(tmp_path):
+    from PIL import Image
+
+    from jaguartv_prematch.pipeline import ROOT, _apply_schedule_channel_logos
+
+    poster = tmp_path / "schedule.png"
+    Image.new("RGB", (1000, 1250), (255, 255, 255)).save(poster)
+    fixtures = [
+        {"fixture_id": f"f-{i}", "kickoff_at_brt": f"{10 + i}:00", "channels": ["ESPN"]}
+        for i in range(9)
+    ]
+
+    _apply_schedule_channel_logos(poster, fixtures, ROOT / "assets" / "channels")
+
+    with Image.open(poster) as image:
+        band_left = round(image.width * 0.79)
+        # 9 rows keep the original evenly-divided geometry: the band still reaches deep.
+        assert image.convert("RGB").getpixel((band_left + 8, round(image.height * 0.88))) != (255, 255, 255)

@@ -11,7 +11,15 @@ TARGET_COMPETITIONS = {
     "campeonato brasileiro serie b",
     "brasileirao serie a",
     "brasileirao serie b",
+    # API-Football names the Brazilian top flights "Serie A"/"Serie B" in this feed, and the
+    # continental cups arrive as "CONMEBOL ...". These are matched as prefixes below so the
+    # " - Regular Season - 27" / " - Quarter-finals" suffixes do not defeat the lookup.
+    "serie a",
+    "serie b",
     "copa do brasil",
+    "conmebol libertadores",
+    "conmebol sudamericana",
+    "uefa champions league",
 }
 
 TARGET_CLUBS = {
@@ -39,7 +47,9 @@ def selection_reason(fixture: Fixture) -> str | None:
         return None
     competition = normalize(fixture.competition)
     teams = {normalize(fixture.home_team), normalize(fixture.away_team)}
-    if competition in TARGET_COMPETITIONS:
+    if competition in TARGET_COMPETITIONS or any(
+        competition.startswith(f"{target} ") for target in TARGET_COMPETITIONS
+    ):
         return "target_competition"
     if teams & TARGET_CLUBS:
         return "target_club"
