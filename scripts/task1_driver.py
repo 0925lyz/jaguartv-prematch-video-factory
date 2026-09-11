@@ -903,11 +903,24 @@ def _lark_send(command: list[str], **kwargs):
     return result
 
 
-def _lark_sample(run_dir: Path, captions: dict, dry_run: bool, task_id: str | None = None) -> dict | None:
+def _lark_sample(run_dir: Path, captions: dict, dry_run: bool, task_id: str | None = None,
+                 *, force: bool = False) -> dict | None:
     items = _read_json(run_dir / "phase4" / "build-manifest.json").get("items", [])
     item = next((i for i in items if not task_id or i.get("task_id") == task_id), None)
     if not item:
         return None
+    # The group sample must reach copa运营群 exactly once. Without this record any replay of the
+    # run (a resumed phase5, an additive re-run, an operator retry) silently posted a second
+    # copy of the same video to the group. `--lark-only` passes force=True to re-send on purpose.
+    record_path = run_dir / "phase4" / "lark-sample.json"
+    if not force and not dry_run and record_path.is_file():
+        try:
+            recorded = _read_json(record_path)
+        except Exception:
+            recorded = None
+        if isinstance(recorded, dict) and recorded.get("file_sent") and recorded.get("text_sent"):
+            print(f"[lark] sample already delivered for {recorded.get('task_id')}; skipping duplicate send", flush=True)
+            return recorded
     video = Path(item["final"])
     covers = sorted(video.parent.glob("cover-*.jpg"))
     cover = str(covers[0]) if covers else None
@@ -941,8 +954,11 @@ def _lark_sample(run_dir: Path, captions: dict, dry_run: bool, task_id: str | No
                     env=env, timeout=120)
     if r1.returncode != 0 or r2.returncode != 0:
         raise RuntimeError(f"lark sample failed: {(r1.stderr or r1.stdout or r2.stderr or r2.stdout)[:800]}")
-    return {"task_id": item.get("task_id"), "file_sent": r1.returncode == 0, "text_sent": r2.returncode == 0,
-            "video_msg_id": _lark_msg_id(r1), "text_msg_id": _lark_msg_id(r2)}
+    result = {"task_id": item.get("task_id"), "file_sent": r1.returncode == 0, "text_sent": r2.returncode == 0,
+              "video_msg_id": _lark_msg_id(r1), "text_msg_id": _lark_msg_id(r2),
+              "sent_at": _now_brt().isoformat()}
+    _write_json(record_path, result)
+    return result
 
 
 # --------------------------------------------------------------------------------------
@@ -983,7 +999,7 @@ def main() -> int:
             print(f"[error] no captions.json at {cap_path}; run a full (non --lark-only) batch first", flush=True)
             return 2
         p4 = _read_json(run_dir / "phase4" / "build-manifest.json")
-        lark = _lark_sample(run_dir, _read_json(cap_path), args.dry_run, _select_lark_task_id(p4))
+        lark = _lark_sample(run_dir, _read_json(cap_path), args.dry_run, _select_lark_task_id(p4), force=True)
         print(json.dumps({"batch": batch, "date": date, "lark_sample": lark}, ensure_ascii=False, indent=2), flush=True)
         return 0
 

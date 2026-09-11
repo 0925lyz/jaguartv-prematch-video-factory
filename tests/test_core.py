@@ -162,6 +162,65 @@ def test_non_featured_match_is_rejected():
     assert selection_reason(fixture(featured=False, home_team="Manchester City")) is None
 
 
+def test_brasileirao_match_without_channel_data_is_still_selected():
+    # The official agenda leaves the broadcast column empty for this round, which makes
+    # the derived `featured` flag False. An incomplete channel cell must not drop a whole
+    # Brazilian top-flight fixture.
+    coritiba = fixture(
+        competition="Serie A - Regular Season - 27",
+        home_team="Coritiba",
+        away_team="Atletico Paranaense",
+        channels=(),
+        featured=False,
+    )
+    assert selection_reason(coritiba) == "target_competition"
+
+
+def test_italian_serie_a_without_channel_data_is_not_selected():
+    # "Serie A" is also the Italian top flight; a Brazilian-club check keeps it out.
+    italian = fixture(
+        competition="Serie A - Regular Season - 4",
+        home_team="Venezia",
+        away_team="Fiorentina",
+        channels=(),
+        featured=False,
+    )
+    assert selection_reason(italian) is None
+
+
+def test_italian_serie_b_without_channel_data_is_not_selected():
+    italian = fixture(
+        competition="Serie B - Regular Season - 4",
+        home_team="Empoli",
+        away_team="Arezzo",
+        channels=(),
+        featured=False,
+    )
+    assert selection_reason(italian) is None
+
+
+def test_unambiguous_target_competition_keeps_its_place_without_channel_data():
+    copa = fixture(
+        competition="Copa do Brasil - Round of 16",
+        home_team="Capixaba FC",
+        away_team="Vila FC",
+        channels=(),
+        featured=False,
+    )
+    assert selection_reason(copa) == "target_competition"
+
+
+def test_brazilian_club_check_uses_normalized_names():
+    accented = fixture(
+        competition="Serie A - Regular Season - 27",
+        home_team="Grêmio",
+        away_team="São Paulo",
+        channels=(),
+        featured=False,
+    )
+    assert selection_reason(accented) == "target_competition"
+
+
 def test_router_rejects_cross_provider_model():
     router = CodexDeepSeekRouter()
     with pytest.raises(ProviderRoutingError):
@@ -541,3 +600,45 @@ def test_schedule_channel_band_still_covers_a_full_agenda(tmp_path):
         band_left = round(image.width * 0.79)
         # 9 rows keep the original evenly-divided geometry: the band still reaches deep.
         assert image.convert("RGB").getpixel((band_left + 8, round(image.height * 0.88))) != (255, 255, 255)
+
+
+def _fake_lark_proc(message_id: str):
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"data": {"message_id": message_id}}),
+        stderr="",
+    )
+
+
+def test_lark_sample_is_posted_to_the_group_at_most_once(tmp_path, monkeypatch):
+    """Any replay of a run must not post a second copy of the same sample to the group."""
+    run_dir = tmp_path / "20260911_batch1"
+    media_dir = run_dir / "phase4" / "01Example FC_vs_Other FC_260911_海报"
+    media_dir.mkdir(parents=True)
+    final = media_dir / "final-01Example FC_vs_Other FC_260911_海报.mp4"
+    final.write_bytes(b"video-bytes")
+    (run_dir / "phase4" / "build-manifest.json").write_text(
+        json.dumps({"items": [{"task_id": "fixture-1", "kind": "single", "final": str(final)}]}),
+        encoding="utf-8",
+    )
+    captions = {"items": [{"task_id": "fixture-1", "description": "palpite do dia"}]}
+
+    commands = []
+
+    def fake_send(command, **kwargs):
+        commands.append(command)
+        return _fake_lark_proc(f"om_{len(commands)}")
+
+    monkeypatch.setattr(task1_driver, "_lark_send", fake_send)
+
+    first = task1_driver._lark_sample(run_dir, captions, False)
+    assert first["file_sent"] is True and first["text_sent"] is True
+    assert len(commands) == 2  # one video message + one text message
+
+    replayed = task1_driver._lark_sample(run_dir, captions, False)
+    assert replayed == first
+    assert len(commands) == 2  # replay is a no-op, the group gets nothing new
+
+    forced = task1_driver._lark_sample(run_dir, captions, False, force=True)
+    assert len(commands) == 4  # --lark-only still re-sends on purpose
+    assert forced["video_msg_id"] != first["video_msg_id"]
