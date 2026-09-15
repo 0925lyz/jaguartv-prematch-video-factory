@@ -10,7 +10,7 @@ from typing import Any
 
 from .config import FactoryConfig
 from .credentials import resolve_base_url, resolve_secret
-from .routing import CodexDeepSeekRouter
+from .routing import CodexTextRouter
 from .runtime import resolve_command
 
 
@@ -28,7 +28,7 @@ def run_preflight(config: FactoryConfig, repository: Path) -> dict[str, Any]:
         checks.append(Check(command, "ok" if resolved else "failed", resolved or "command not found"))
 
     text = config.data["text"]
-    route = CodexDeepSeekRouter(text["provider_id"]).verify(text["primary_model_id"])
+    route = CodexTextRouter(text["provider_id"]).verify(text["primary_model_id"])
     checks.append(Check("text_route", route.status, route.sanitized_error or route.model_id))
 
     doctor = _run_json(["agent-reach", "doctor", "--json"], timeout=120)

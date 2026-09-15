@@ -8,11 +8,14 @@ untouched.
 
 - Tomorrow-fixture collection in Horário de Brasília.
 - Featured-match selection with current Brazilian-player membership gating.
-- Provider-safe DeepSeek text routing with a recorded fallback.
+- Current-task text routing with an optional explicitly configured provider/model fallback.
 - Independent primary/fallback Image2 configuration.
 - Dreamina/Jimeng VIP Seedance video generation with an explicit APIMart
   `wan2.6-i2v-flash` 720p/4s fallback.
-- Video generation is scoped to the 4-second poster hook only. Two distinct operation-class
+- Image2 produces a clean background; exact text, channel icons, and the original Figure 1 logo are
+  composited into a 2048x2560 PNG and saved as a locked foreground layer.
+- Exactly half of each poster batch is selected deterministically for a background-only 4-second
+  motion hook. Every unselected poster uses a local static 4-second hook. Two distinct operation-class
   videos and the selected motion CTA then play in full, so final duration is content-driven.
 - SHA-256-deduplicated poster, operation-clip, and CTA delivery builder.
 - Tests for timezone, selection rules, and provider/model rejection.

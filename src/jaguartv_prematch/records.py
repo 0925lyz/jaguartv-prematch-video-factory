@@ -17,6 +17,11 @@ class Fixture:
     source_url: str
     retrieved_at: str
     source_text: str
+    league_id: int | None = None
+    league_country: str = ""
+    league_season: int | None = None
+    home_team_id: int | None = None
+    away_team_id: int | None = None
     verified_brazilian_players: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict, compare=False)
 

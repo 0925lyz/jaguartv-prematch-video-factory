@@ -13,22 +13,16 @@ class ProviderRoutingError(RuntimeError):
     pass
 
 
-class CodexDeepSeekRouter:
-    ALLOWED_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
-
-    def __init__(self, provider_id: str = "deepseek") -> None:
-        if provider_id != "deepseek":
-            raise ProviderRoutingError("Unsupported text provider")
+class CodexTextRouter:
+    def __init__(self, provider_id: str = "current-task") -> None:
+        if not provider_id.strip():
+            raise ProviderRoutingError("Text provider is empty")
         self.provider_id = provider_id
 
     def verify(self, model_id: str, timeout: int = 90) -> ProviderUse:
         self._validate_model(model_id)
         started = _now()
-        command = [
-            "codex", "exec", "--ephemeral", "--skip-git-repo-check",
-            "-c", 'model_provider="deepseek"', "-m", model_id,
-            "Reply exactly: ROUTE-OK",
-        ]
+        command = ["codex", "exec", "--ephemeral", "--skip-git-repo-check", *self._model_args(model_id), "Reply exactly: ROUTE-OK"]
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
         output = f"{result.stdout}\n{result.stderr}"
         status = "ok" if result.returncode == 0 and "ROUTE-OK" in output else "failed"
@@ -47,8 +41,7 @@ class CodexDeepSeekRouter:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [
-                "codex", "exec", "--ephemeral", "--skip-git-repo-check",
-                "-c", 'model_provider="deepseek"', "-m", model_id,
+                "codex", "exec", "--ephemeral", "--skip-git-repo-check", *self._model_args(model_id),
                 "-o", str(output_path), prompt,
             ],
             capture_output=True,
@@ -67,8 +60,16 @@ class CodexDeepSeekRouter:
         )
 
     def _validate_model(self, model_id: str) -> None:
-        if model_id not in self.ALLOWED_MODELS:
-            raise ProviderRoutingError(f"Model {model_id!r} is not valid for provider {self.provider_id!r}")
+        if not model_id.strip():
+            raise ProviderRoutingError("Text model is empty")
+
+    def _model_args(self, model_id: str) -> list[str]:
+        args = []
+        if self.provider_id != "current-task":
+            args.extend(["-c", f'model_provider="{self.provider_id}"'])
+        if model_id != "current-task":
+            args.extend(["-m", model_id])
+        return args
 
 
 def append_provider_record(path: Path, record: ProviderUse) -> None:

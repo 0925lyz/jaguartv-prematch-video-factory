@@ -51,13 +51,9 @@ from jaguartv_prematch.pipeline import (  # noqa: E402
     CREST_SAFETY,
     ROOT as REPO_ROOT,
     WEEKDAY_PT,
-    _apply_fixed_logo,
-    _apply_schedule_channel_logos,
     _check_duration,
     _colors,
     _component_pools,
-    _date_long_pt,
-    _date_pt,
     _fixture_for,
     _hashtags,
     _loop_video,
@@ -70,15 +66,18 @@ from jaguartv_prematch.pipeline import (  # noqa: E402
     _yyMMdd,
     _zh,
 )
+from jaguartv_prematch.poster import compose_poster, prepare_background  # noqa: E402
 from jaguartv_prematch.upload import UploadError, upload_pending_review  # noqa: E402
 from jaguartv_prematch.video import (  # noqa: E402
     compose_v7,
     deterministic_batch_rotation,
+    deterministic_motion_plan,
     download_dreamina_result,
     generate_apimart_hook,
     make_exact_hook,
-    make_vertical_master,
+    make_layered_master,
     submit_dreamina_hook,
+    validate_layered_hook,
     video_filenames,
     VideoGenerationError,
 )
@@ -332,85 +331,32 @@ def _players_for(fixture: dict) -> tuple[list[str], list[str]]:
 # --- poster prompt (real-player likeness + batch style) --------------------------------
 def _single_poster_prompt(fixture: dict, style_scene: str, home_stars: list[str], away_stars: list[str],
                           prediction: dict[str, str] | None = None) -> str:
-    """Full-copy single-match poster prompt (r2 gold-standard layout).
-
-    Image2 renders EVERYTHING: PRÉ-JOGO header, competition, date/kickoff/channel info row,
-    both crests with team names, and ONE bottom PALPITE box. Style only steers mood/grading —
-    it must never suppress the copy. Real star players frame the edges without covering text.
-    """
+    """Image2 background prompt; factual foreground is composited deterministically."""
     home, away = str(fixture["home_team"]), str(fixture["away_team"])
     p_home = home_stars[0] if home_stars else "an anonymous hardman footballer representing the home team"
     p_away = away_stars[0] if away_stars else "an anonymous hardman footballer representing the away team"
     p_home_b = home_stars[1] if len(home_stars) > 1 else p_home
     p_away_b = away_stars[1] if len(away_stars) > 1 else p_away
-    prediction = prediction or {}
-    score = prediction.get("score") or f"{home} with a small integer 0-3 on each side"
-    probabilities = prediction.get("probabilities") or (
-        f"{home} first, Empate middle, {away} last, three percentages summing near 100%")
-    tactical = prediction.get("tactical") or "one short factual Brazilian Portuguese tactical sentence"
     return (
-        "Create a premium 4:5 JaguarTV pre-match football prediction poster, final composition "
-        "2048x2560. ALL visible copy must be natural Brazilian Portuguese with correct accents, "
-        "crisp, perfectly legible and rendered by you — this is a finished poster, not a background. "
+        "Create a premium 4:5 pre-match football background with no text or graphics. "
         f"Visual mood: {style_scene} "
-        "Layout, top to bottom: "
-        "(1) Header, pinned to the LEFT side of the canvas: the exact word 'PRÉ-JOGO' as a bold "
-        "LEFT-ALIGNED title that starts at the left margin and ends before the 55% width mark — it "
-        "must never extend past the horizontal centre of the canvas, so keep the type small enough; "
-        "the complete word 'PRÉ-JOGO' must be fully readable, no letter clipped by any edge. The "
-        f"competition name '{fixture.get('competition')}' sits directly beneath it, also left-aligned "
-        "and fully inside the frame. The entire right ~45% of the header zone stays empty (brand logo "
-        "is baked in programmatically). "
-        "(2) Info row with three small labelled cells: DATA "
-        f"'{_date_pt(str(fixture['schedule_date']))}', HORÁRIO '{fixture.get('kickoff_at_brt')}' with "
-        "'Horário de Brasília' under it, TRANSMISSÃO "
-        f"'{', '.join(fixture.get('channels') or ['Jaguar TV'])}'. "
-        f"(3) Middle band: the official {home} crest strictly on the LEFT and the official {away} crest "
-        "strictly on the RIGHT, a large 'X' between them, and each team's name in bold capitals under "
-        "its crest. "
-        "(4) Bottom: exactly ONE dark prediction panel labeled 'PALPITE' containing, in this order: the "
-        f"predicted score '{score}' in large type, the probability line '{probabilities}', and the "
-        f"tactical note '{tactical}'. No second prediction box anywhere. "
         f"Players: photorealistic likeness of {p_home} and {p_home_b} in {home} current official kit "
         f"({_colors(home)}) framing the far LEFT edge, and {p_away} and {p_away_b} in {away} current "
         f"official kit ({_colors(away)}) framing the far RIGHT edge, waist-up, facing each other; they "
-        "must never overlap or cover any text, crest, or the prediction panel, and nothing may sit on "
-        "or above their heads, faces or shoulders. "
-        "Keep the upper-right corner completely empty of text and graphics — the JaguarTV brand logo "
-        "is baked in programmatically afterwards; do NOT render any 'JaguarTV' wordmark yourself. "
-        "Negative constraints: no betting advice, no odds, no 18+, no gambling or responsible-gambling "
-        "copy, no English body text, no invented or garbled words, no fake scores, no fake crests, no "
-        "extra panels or banners beyond the layout above. "
+        "must leave the top 30%, central information band, and bottom 38% visually quiet. "
+        "Absolutely no readable text, digits, typography, UI panels, scoreboards, logos, crests, "
+        "channel marks, sponsor marks, watermarks, or JaguarTV imagery. "
         f"{CREST_SAFETY} {ANTI_FIGURE}"
     )
 
 
 def _schedule_poster_prompt(fixtures: list[dict], style_scene: str) -> str:
-    dated = sorted(fixtures, key=lambda i: str(i.get("kickoff_at_brt", "")))
-    match_date = str(dated[0]["schedule_date"])
-    rows = "; ".join(f"{i['kickoff_at_brt']} {i['home_team']} vs {i['away_team']}" for i in dated[:8])
     return (
-        "Create a 4:5 JaguarTV 'AGENDA DE JOGOS' schedule poster in Brazilian Portuguese — a finished "
-        "poster, not a background: all copy must be rendered by you, crisp and perfectly legible. "
+        "Create a premium 4:5 football schedule background only. "
         f"Visual mood: {style_scene} "
-        "Header: a bold 'AGENDA DE JOGOS' title with the match date "
-        f"'{_date_pt(match_date)}' and 'Horário de Brasília' beneath it. The header (title, date and "
-        "all lettering) must stay within the LEFT and CENTRE of the canvas (the left 60% of the "
-        "width); the entire top-right region — the right ~40% of the width across the top ~18% of "
-        "the height — must remain completely empty: no letters, no shapes, no textures change, because "
-        "the JaguarTV brand logo is baked in there programmatically. "
-        "Body: one precisely aligned row per match, each row layout MUST be exactly: kickoff time on "
-        "the LEFT, then the home club crest strictly LEFT vs the away club crest strictly RIGHT in the "
-        "centre with 'VS' between them, both team names in bold capitals under their crests, and a "
-        "clean EMPTY vertical band along the RIGHT edge (x 79%-99% of width) reserved for channel "
-        "logos that are overlaid programmatically afterwards. EVERY word in every row (kickoff "
-        "times and both team names) must fit entirely inside the canvas, ending well before the "
-        "reserved right band — scale the type down if needed; no letter may touch or cross a canvas "
-        "edge. "
-        "Do NOT draw any PALPITE wordmark, channel name wordmark, or TV-network logo inside the "
-        "artwork, and keep the upper-right corner free of text (brand logo is overlaid afterwards). "
-        f"Rows: {rows}. "
-        f"Give every row the correct club colours. {CREST_SAFETY} {ANTI_FIGURE}"
+        "Use stadium depth and restrained club-neutral lighting with quiet space for a header and up to "
+        "eight factual rows. Absolutely no readable text, digits, typography, row labels, UI panels, "
+        "logos, crests, channel marks, sponsor marks, watermarks, or JaguarTV imagery."
     )
 
 
@@ -434,11 +380,16 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
                                             prediction=_prediction_block(fx, run_dir)),
             "title": f"{fx['home_team']} vs {fx['away_team']}",
         })
-    tasks.append({
-        "id": f"schedule-{_yyMMdd(str(fixtures[0]['schedule_date']))}", "kind": "schedule",
-        "filename": f"{_yyMMdd(str(fixtures[0]['schedule_date']))}_赛程海报.png",
-        "prompt": _schedule_poster_prompt(fixtures, style_scene), "title": "Agenda JaguarTV",
-    })
+    dated = sorted(fixtures, key=lambda item: str(item.get("kickoff_at_brt", "")))
+    for offset in range(0, len(dated), 8):
+        page = offset // 8 + 1
+        suffix = f"-{page:02d}" if len(dated) > 8 else ""
+        tasks.append({
+            "id": f"schedule-{_yyMMdd(str(dated[0]['schedule_date']))}{suffix}", "kind": "schedule",
+            "filename": f"{_yyMMdd(str(dated[0]['schedule_date']))}_赛程海报{suffix}.png",
+            "prompt": _schedule_poster_prompt(dated[offset : offset + 8], style_scene),
+            "title": "Agenda JaguarTV", "fixtures": dated[offset : offset + 8],
+        })
 
     existing_items = {}
     manifest_path = phase_dir / "poster-manifest.json"
@@ -452,6 +403,9 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
     total = len(tasks)
     for index, task in enumerate(tasks, 1):
         prompt_path = phase_dir / "prompts" / f"{task['id']}.txt"
+        raw_path = phase_dir / "raw" / f"{task['id']}.png"
+        background_path = phase_dir / "backgrounds" / f"{task['id']}.png"
+        foreground_path = phase_dir / "foregrounds" / f"{task['id']}.png"
         poster_path = phase_dir / "posters" / task["filename"]
         existing = existing_items.get(str(task["id"]))
         if existing and _valid_media(Path(str(existing.get("poster", "")))):
@@ -462,20 +416,26 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
         prompt_path.write_text(task["prompt"], encoding="utf-8")
         if dry_run:
-            _make_dry_poster(poster_path)
+            _make_dry_poster(raw_path)
             route = [{"provider_id": "dry-run", "model_id": "none", "status": "not_called"}]
         else:
-            attempts = generate_image2(task["prompt"], poster_path, config.data["image"])
+            attempts = generate_image2(task["prompt"], raw_path, config.data["image"])
             save_image_route_manifest(phase_dir / "image-routes" / f"{task['id']}.json", attempts)
             route = [a.__dict__ for a in attempts]
-        logo_overlay = _apply_fixed_logo(poster_path)
-        channel_overlay = None
-        if task["kind"] == "schedule":
-            channel_overlay = _apply_schedule_channel_logos(poster_path, fixtures, REPO_ROOT / "assets" / "channels")
+        prepare_background(raw_path, background_path)
+        task_fixtures = task["fixtures"] if task["kind"] == "schedule" else [next(fx for fx in fixtures if _task_id(fx) == task["id"])]
+        predictions = {_task_id(fx): _prediction_block(fx, run_dir) for fx in task_fixtures}
+        compose_meta = compose_poster(
+            background_path, poster_path, foreground_path, kind=task["kind"],
+            fixtures=task_fixtures, predictions=predictions,
+            logo_path=REPO_ROOT / "assets" / "brand" / "jaguartv-logo.png",
+            channels_root=REPO_ROOT / "assets" / "channels",
+        )
         items.append({
             "task_id": task["id"], "kind": task["kind"], "prompt": str(prompt_path),
-            "poster": str(poster_path), "fixed_logo_overlay": logo_overlay,
-            "channel_logo_overlay": channel_overlay, "image_route": route,
+            "raw_background": str(raw_path), "background": str(background_path),
+            "foreground": str(foreground_path), "poster": str(poster_path),
+            "compose": compose_meta, "image_route": route,
         })
         _write_json(manifest_path, {
             "ok": True, "status": "PHASE3_IN_PROGRESS", "poster_count": len(items),
@@ -488,14 +448,11 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
 
 
 def _make_dry_poster(output: Path) -> None:
-    from PIL import Image, ImageDraw, ImageOps
+    from PIL import Image, ImageDraw
     output.parent.mkdir(parents=True, exist_ok=True)
     img = Image.new("RGB", (1024, 1280), (12, 92, 48))
     draw = ImageDraw.Draw(img)
-    logo = ImageOps.exif_transpose(Image.open(REPO_ROOT / "assets/brand/jaguartv-logo.png")).convert("RGBA")
-    logo.thumbnail((170, 170))
-    img.paste(logo, (830, 28), logo)
-    draw.text((60, 300), "PRÉ-JOGO (dry)", fill=(255, 230, 70))
+    draw.ellipse((80, 180, 930, 1100), fill=(18, 120, 78))
     img.save(output)
 
 
@@ -510,6 +467,7 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
 
     pools = _component_pools(REPO_ROOT)
     rotations = deterministic_batch_rotation(date_seed, [i["task_id"] for i in posters], pools)
+    motion_plan = deterministic_motion_plan([i["task_id"] for i in posters], date_seed)
     resume_items = {str(i.get("task_id")): i for i in _load_phase4_resume_items(phase_dir)}
     items = []
     total = len(posters)
@@ -518,6 +476,8 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
         names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)), seq)
         out = phase_dir / names["media_stem"]
         master = out / names["master"]
+        background_master = out / f"background-{names['master']}"
+        foreground_master = out / f"foreground-{names['master']}"
         hook = out / names["hook"]
         final = out / names["final"]
         cover = out / names["cover"]
@@ -527,23 +487,29 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
             items.append(existing)
             continue
         print(f"[phase4] {seq}/{total} video start: {poster.name}", flush=True)
-        master_info = make_vertical_master(poster, master)
+        master_info = make_layered_master(
+            Path(item["background"]), Path(item["foreground"]), master,
+            background_master, foreground_master,
+        )
         from PIL import Image
         Image.open(master).save(cover, "JPEG", quality=92)
         motion_prompt = (
-            f"Animate this exact 9:16 JaguarTV pre-match master for 4 seconds: {master.name}. "
-            "Keep the poster-cover composition visible as the dominant full-frame subject throughout all "
-            "4 seconds; preserve all Brazilian Portuguese text, player identity, club kit, crests, "
-            "channel icons, date, kickoff time, prediction, and the upper-right JaguarTV logo. Do not add a "
-            "second JaguarTV logo. Make the background alive with stadium lights, crowd depth, sparks, cloth "
-            "movement, and a fierce face-to-face player confrontation when two players are present."
+            f"Animate only this text-free 9:16 football background for exactly 4 seconds: {background_master.name}. "
+            "Use stadium lights, crowd depth, restrained sparks and cloth movement. Do not add text, scores, "
+            "team graphics, channel icons, logos, watermarks, UI, or new people. The factual foreground is locked "
+            "and composited locally after generation."
         )
         motion_path = out / "motion-prompt.txt"
         motion_path.parent.mkdir(parents=True, exist_ok=True)
         motion_path.write_text(motion_prompt, encoding="utf-8")
-        if dry_run:
+        selected_for_motion = motion_plan[item["task_id"]]["dynamic"]
+        if not selected_for_motion:
+            raw = None
+            _loop_video(master, hook, 4)
+            generation = {"provider_id": "static-local", "model_id": "none", "task_id": None, "raw_video": None, "status": "not_called"}
+        elif dry_run:
             raw = out / names["raw_video"]
-            _loop_video(master, raw, int(config.data["video"].get("generation_seconds", 4)))
+            _loop_video(background_master, raw, int(config.data["video"].get("generation_seconds", 4)))
             generation = {"provider_id": "dry-run", "model_id": "none", "task_id": None, "raw_video": str(raw), "status": "not_called"}
         else:
             dreamina_state = out / "dreamina-submit.json"
@@ -577,8 +543,8 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
                                 if raw_dir.is_dir():
                                     shutil.rmtree(raw_dir)
                                 raw_dir.mkdir(parents=True, exist_ok=True)
-                                print(f"[phase4] {seq}/{total} submit dreamina: {master.name}", flush=True)
-                                task_id = submit_dreamina_hook(master, motion_prompt, config.data["video"])
+                                print(f"[phase4] {seq}/{total} submit dreamina background: {background_master.name}", flush=True)
+                                task_id = submit_dreamina_hook(background_master, motion_prompt, config.data["video"])
                                 _write_json(dreamina_state, {
                                     "provider_id": config.data["video"]["provider_id"],
                                     "model_id": config.data["video"]["model_id"],
@@ -610,7 +576,7 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
                         raise
                     fallback_raw = out / "apimart-raw" / f"apimart-{names['media_stem']}-4s.mp4"
                     print(f"[phase4] {seq}/{total} dreamina unavailable; using configured APIMart fallback", flush=True)
-                    generation = generate_apimart_hook(master, motion_prompt, fallback, fallback_raw)
+                    generation = generate_apimart_hook(background_master, motion_prompt, fallback, fallback_raw)
                     generation["fallback_from"] = config.data["video"]["provider_id"]
                     generation["attempts"] = [
                         {"provider_id": config.data["video"]["provider_id"], "model_id": config.data["video"]["model_id"],
@@ -618,7 +584,12 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
                         {"provider_id": generation["provider_id"], "model_id": generation["model_id"], "status": "ok"},
                     ]
                     raw = fallback_raw
-        make_exact_hook(master, raw, hook, 4.0)
+        if selected_for_motion:
+            assert raw is not None
+            make_exact_hook(master, Path(raw), foreground_master, hook, 4.0)
+        layer_qa = validate_layered_hook(hook, master, foreground_master)
+        if not layer_qa["foreground_stable"]:
+            raise RuntimeError(f"locked foreground changed during hook for {item['task_id']}: {layer_qa}")
         final_seconds = compose_v7(REPO_ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
         _check_duration(final, final_seconds)
         items.append({
@@ -626,6 +597,8 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
             "master": str(master), "hook": str(hook), "final": str(final), "cover": str(cover),
             "cover_source": "full poster master", "motion_prompt": str(motion_path), "master_info": master_info,
             "generated_seconds": 4, "final_seconds": round(final_seconds, 3),
+            "motion_selection": motion_plan[item["task_id"]], "layer_qa": layer_qa,
+            "background_master": str(background_master), "foreground_master": str(foreground_master),
             "components": rotations[item["task_id"]], "video_generation": generation,
         })
         _write_json(phase_dir / "build-manifest.partial.json", {

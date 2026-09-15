@@ -102,7 +102,10 @@ def _normalize_fixture(
     target_date: str | None = None,
     retrieved_at: str = "",
 ) -> Fixture:
-    teams = row.get("teams", {})
+    teams = row.get("teams", {}) if isinstance(row.get("teams"), dict) else {}
+    league = row.get("league", {}) if isinstance(row.get("league"), dict) else {}
+    home = teams.get("home", {}) if isinstance(teams.get("home"), dict) else {}
+    away = teams.get("away", {}) if isinstance(teams.get("away"), dict) else {}
     channels = row.get("channels") or ([row["channel"]] if row.get("channel") else [])
     channel_names = tuple(
         str(item.get("name", "")).strip() if isinstance(item, dict) else str(item).strip()
@@ -112,9 +115,9 @@ def _normalize_fixture(
     schedule_date = _schedule_date(str(row.get("schedule_date") or row.get("date") or ""), target_date)
     return Fixture(
         fixture_id=str(row.get("fixture_id") or row.get("id") or row.get("fingerprint") or ""),
-        competition=str(row.get("competition") or row.get("league") or "").strip(),
-        home_team=str(row.get("home_team") or row.get("homeTeam") or teams.get("home") or "").strip(),
-        away_team=str(row.get("away_team") or row.get("awayTeam") or teams.get("away") or "").strip(),
+        competition=str(row.get("competition") or league.get("name") or row.get("league") or "").strip(),
+        home_team=str(row.get("home_team") or row.get("homeTeam") or home.get("name") or teams.get("home") or "").strip(),
+        away_team=str(row.get("away_team") or row.get("awayTeam") or away.get("name") or teams.get("away") or "").strip(),
         schedule_date=schedule_date,
         kickoff_at_brt=str(row.get("kickoff_at_brt") or row.get("kickoff_time") or row.get("time") or ""),
         channels=channel_names,
@@ -122,9 +125,21 @@ def _normalize_fixture(
         source_url=str(row.get("source_url") or row.get("url") or "https://copa.jarg.top/jogos-de-hoje"),
         retrieved_at=str(row.get("retrieved_at") or row.get("retrieval_timestamp") or retrieved_at),
         source_text=str(row.get("source_text") or row.get("original_source_text") or json.dumps(row, ensure_ascii=False, sort_keys=True)),
+        league_id=_optional_int(row.get("league_id") or league.get("id")),
+        league_country=str(row.get("league_country") or league.get("country") or "").strip(),
+        league_season=_optional_int(row.get("league_season") or league.get("season")),
+        home_team_id=_optional_int(row.get("home_team_id") or home.get("id")),
+        away_team_id=_optional_int(row.get("away_team_id") or away.get("id")),
         verified_brazilian_players=tuple(row.get("verified_brazilian_players", [])),
         raw=row,
     )
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _schedule_date(value: str, target_date: str | None) -> str:

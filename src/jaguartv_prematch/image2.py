@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import http.client
 import json
-import os
 import re
 import time
 import urllib.error
@@ -15,6 +14,7 @@ from typing import Any
 
 from .records import ProviderUse
 from .credentials import resolve_base_url, resolve_secret
+from .retry import retry_forever, _write_state
 
 
 class ImageGenerationError(RuntimeError):
@@ -32,53 +32,77 @@ def generate_image2(
     max_retries: int = 4,
     retry_backoff: float = 8.0,
 ) -> list[ProviderUse]:
-    last_error: ImageGenerationError | None = None
-    for attempt in range(max_retries):
-        attempts: list[ProviderUse] = []
-        for index, route_name in enumerate(("primary", "fallback")):
-            route = image_config[route_name]
-            provider_id = route["provider_id"]
-            model_id = image_config["model_id"]
-            started = _now()
-            try:
-                base_url = resolve_base_url(route)
-                api_key = resolve_secret(route)
-                endpoint = base_url if base_url.endswith("/images/generations") else f"{base_url}/v1/images/generations"
+    attempts: list[ProviderUse] = []
+    model_id = image_config["model_id"]
+    state_path = output.with_suffix(".apimart-retry.json")
+
+    def call(route: dict[str, Any], fallback_from: str | None = None) -> None:
+        provider_id = route["provider_id"]
+        started = _now()
+        try:
+            base_url = resolve_base_url(route)
+            api_key = resolve_secret(route)
+            image: dict[str, Any] | None = None
+            if provider_id == "apimart" and state_path.is_file():
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                task_id = str(state.get("provider_task_id") or "")
+                if task_id:
+                    image = _poll_apimart(base_url, api_key, task_id, timeout, state_path=state_path)
+            if image is None:
+                endpoint = _image_endpoint(base_url)
                 payload = json.dumps({
-                    "model": model_id,
-                    "prompt": prompt,
-                    "n": 1,
+                    "model": model_id, "prompt": prompt, "n": 1,
                     "size": image_config.get("size", "1024x1280"),
                 }).encode("utf-8")
                 request = urllib.request.Request(
-                    endpoint,
-                    data=payload,
+                    endpoint, data=payload,
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     method="POST",
                 )
                 with urllib.request.urlopen(request, timeout=timeout) as response:
                     result = json.load(response)
-                image = _resolve_image(result, base_url, api_key, timeout)
-                output.parent.mkdir(parents=True, exist_ok=True)
-                if image.get("b64_json"):
-                    output.write_bytes(base64.b64decode(image["b64_json"]))
-                elif image.get("url"):
-                    output.write_bytes(_download_image_url(image["url"], timeout))
-                else:
-                    raise RuntimeError("Image provider returned no image data")
-                _verify_requested_size(output, image_config.get("size", "1024x1280"))
-                attempts.append(ProviderUse(provider_id, model_id, started, _now(), "ok",
-                                            fallback_from=image_config["primary"]["provider_id"] if index else None))
-                return attempts
-            except (KeyError, OSError, RuntimeError, urllib.error.URLError, http.client.HTTPException) as error:
-                attempts.append(ProviderUse(provider_id, model_id, started, _now(), "failed",
-                                            fallback_from=image_config["primary"]["provider_id"] if index else None,
-                                            sanitized_error=_sanitize(error)))
-        last_error = ImageGenerationError("Both configured Image2 routes failed", attempts)
-        if attempt < max_retries - 1:
-            time.sleep(retry_backoff)
-    assert last_error is not None
-    raise last_error
+                image = _resolve_image(result, base_url, api_key, timeout, state_path if provider_id == "apimart" else None)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            if image.get("b64_json"):
+                output.write_bytes(base64.b64decode(image["b64_json"]))
+            elif image.get("url"):
+                output.write_bytes(_download_image_url(image["url"], timeout))
+            else:
+                raise RuntimeError("Image provider returned no image data")
+            _verify_requested_size(output, image_config.get("size", "1024x1280"))
+        except (KeyError, OSError, RuntimeError, urllib.error.URLError, http.client.HTTPException) as error:
+            attempts.append(ProviderUse(provider_id, model_id, started, _now(), "failed", fallback_from=fallback_from, sanitized_error=_sanitize(error)))
+            raise
+        attempts.append(ProviderUse(provider_id, model_id, started, _now(), "ok", fallback_from=fallback_from))
+
+    primary = image_config["primary"]
+    primary_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            call(primary)
+            return attempts
+        except Exception as error:
+            primary_error = error
+            if attempt < max_retries - 1:
+                time.sleep(retry_backoff * (attempt + 1))
+
+    fallback = image_config["fallback"]
+    if fallback.get("provider_id") != "apimart":
+        raise ImageGenerationError(f"Primary Image2 failed and configured fallback is not APIMart: {_sanitize(primary_error or RuntimeError('unknown'))}", attempts)
+    try:
+        retry_forever(
+            lambda: call(fallback, str(primary.get("provider_id"))),
+            state_path=state_path, operation_name=f"image2:{output.stem}",
+        )
+    except Exception as error:
+        raise ImageGenerationError(f"APIMart Image2 fallback failed permanently: {_sanitize(error)}", attempts) from error
+    return attempts
+
+
+def _image_endpoint(base_url: str) -> str:
+    if base_url.endswith("/images/generations"):
+        return base_url
+    return f"{base_url}/images/generations" if base_url.endswith("/v1") else f"{base_url}/v1/images/generations"
 
 
 def save_image_route_manifest(path: Path, attempts: list[ProviderUse]) -> None:
@@ -138,7 +162,7 @@ def _download_image_url(url: str, timeout: int, attempts: int = 3) -> bytes:
     raise RuntimeError(f"image URL download failed after {attempts} attempts: {_sanitize(last_error or RuntimeError('unknown'))}")
 
 
-def _resolve_image(result: Any, base_url: str, api_key: str, timeout: int) -> dict[str, Any]:
+def _resolve_image(result: Any, base_url: str, api_key: str, timeout: int, state_path: Path | None = None) -> dict[str, Any]:
     """Normalize a provider response into an OpenAI-style image descriptor.
 
     Handles both synchronous OpenAI-compatible responses (data[0].b64_json/url)
@@ -152,13 +176,15 @@ def _resolve_image(result: Any, base_url: str, api_key: str, timeout: int) -> di
         return first
     task_id = first.get("task_id")
     if task_id:
-        return _poll_apimart(base_url, api_key, task_id, timeout)
+        if state_path:
+            _write_state(state_path, {"provider_task_id": str(task_id), "provider_task_status": "polling"})
+        return _poll_apimart(base_url, api_key, task_id, timeout, state_path=state_path)
     raise RuntimeError("Image provider returned no image data")
 
 
-def _poll_apimart(base_url: str, api_key: str, task_id: str, timeout: int, max_poll: int = 40, interval: float = 5.0) -> dict[str, Any]:
+def _poll_apimart(base_url: str, api_key: str, task_id: str, timeout: int, max_poll: int = 40, interval: float = 5.0, state_path: Path | None = None) -> dict[str, Any]:
     """Poll an apimart async image task until completion and return {url: ...}."""
-    poll_url = f"{base_url}/v1/tasks/{task_id}"
+    poll_url = f"{base_url}/tasks/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/tasks/{task_id}"
     last_status = None
     for _ in range(max_poll):
         request = urllib.request.Request(
@@ -177,6 +203,10 @@ def _poll_apimart(base_url: str, api_key: str, task_id: str, timeout: int, max_p
                 if isinstance(url, list):
                     url = url[0]
                 return {"url": url}
+        if str(last_status).lower() in {"failed", "error", "cancelled", "canceled"}:
+            if state_path:
+                _write_state(state_path, {"provider_task_id": "", "provider_task_status": str(last_status)})
+            raise RuntimeError(f"apimart task failed: {task_id} status={last_status}")
         time.sleep(interval)
     raise RuntimeError(f"apimart task {task_id} polling timed out (last status: {last_status})")
 

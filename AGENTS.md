@@ -16,9 +16,13 @@ These rules apply to every task and automation in this repository.
 - Image generation uses the configured active `gpt-image-2` route first and APIMart second.
 - A fallback must be recorded; it must never be silent.
 - The upper-right JaguarTV logo must be baked into the poster itself exactly once. Video compositing must not add a second logo overlay.
+- Image2 generates only the clean 4:5 background. Text, predictions, team information, channel icons,
+  and the exact Figure 1 logo are composited deterministically into a 2048x2560 PNG foreground.
 - Video generation uses the authenticated Dreamina/Jimeng VIP Seedance route first. If it is
   unavailable, use only the configured APIMart `wan2.6-i2v-flash` fallback at 720p for 4 seconds
   and record both provider attempts.
+- Select exactly half of each poster batch deterministically for background-only motion; odd batches
+  drop one deterministic motion candidate. Every remaining poster uses a local static 4-second hook.
 - Generate exactly the opening 4-second poster hook. Play each selected operation-class video
   and motion CTA in full; the final duration is their actual combined duration, not a fixed 12 seconds.
   Middle clips, CTA, music, and voiceover must come from existing authorized inventory.

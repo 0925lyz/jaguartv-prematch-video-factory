@@ -34,15 +34,19 @@ class FactoryConfig:
             raise ConfigurationError(f"Missing configuration sections: {', '.join(missing)}")
 
         text = data["text"]
-        if text.get("provider_id") != "deepseek":
-            raise ConfigurationError("Text provider must be the configured DeepSeek provider")
-        allowed = {"deepseek-v4-flash", "deepseek-v4-pro"}
-        configured = {text.get("primary_model_id"), text.get("fallback_model_id")}
-        if not configured <= allowed:
-            raise ConfigurationError("Text model is not allowed for the DeepSeek provider")
+        if not all(str(text.get(key) or "").strip() for key in ("provider_id", "primary_model_id", "fallback_model_id")):
+            raise ConfigurationError("Text provider and model routes must be configured")
 
         if data["publishing"].get("inventory_label") != "赛前预测":
             raise ConfigurationError("Publishing inventory label must be exactly 赛前预测")
+
+        image = data["image"]
+        if image.get("model_id") != "gpt-image-2":
+            raise ConfigurationError("Poster generation model must be gpt-image-2")
+        if (image.get("primary") or {}).get("provider_id") != "active-large-model-api":
+            raise ConfigurationError("The active large-model API must be the primary Image2 route")
+        if (image.get("fallback") or {}).get("provider_id") != "apimart":
+            raise ConfigurationError("APIMart must remain the explicit secondary Image2 route")
 
         video = data["video"]
         if int(video.get("generation_seconds", 0)) != 4:

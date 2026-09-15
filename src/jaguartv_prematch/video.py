@@ -6,14 +6,16 @@ import json
 import random
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 import requests
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageFilter, ImageOps, ImageStat
 
 from .credentials import resolve_base_url, resolve_secret
+from .retry import _write_state, retry_forever
 from .runtime import resolve_command
 
 
@@ -104,35 +106,62 @@ def deterministic_batch_rotation(
     return selected
 
 
-def make_vertical_master(poster: Path, output: Path) -> dict[str, Any]:
-    with Image.open(poster) as source:
-        foreground = ImageOps.exif_transpose(source).convert("RGB")
-    # Image2 occasionally returns a non-4:5 portrait (e.g. 2:3 or 9:16). Accept any portrait
-    # source: `contain` below keeps the full poster visible without cropping, the blurred
-    # background fills the 1080x1920 frame. Strictly reject landscape orientations because
-    # they cannot be represented as a 4:5 portrait pre-match poster.
-    if foreground.width >= foreground.height:
-        raise VideoGenerationError(
-            f"Poster orientation is landscape; expected portrait 4:5: {foreground.size}"
-        )
-    background = ImageOps.fit(foreground, (1080, 1920), method=Image.Resampling.LANCZOS)
-    background = background.filter(ImageFilter.GaussianBlur(35))
-    background = Image.blend(background, Image.new("RGB", background.size, (8, 12, 16)), 0.35)
-    fitted = ImageOps.contain(foreground, (1080, 1350), method=Image.Resampling.LANCZOS)
-    x = (1080 - fitted.width) // 2
-    y = (1920 - fitted.height) // 2
-    background.paste(fitted, (x, y))
+def deterministic_motion_plan(task_ids: list[str], seed: str) -> dict[str, dict[str, Any]]:
+    ranked = sorted(set(task_ids), key=lambda task_id: hashlib.sha256(f"{seed}:{task_id}".encode()).hexdigest())
+    dropped = ranked[-1] if len(ranked) % 2 else None
+    candidates = ranked[:-1] if dropped else ranked
+    selected = set(candidates[: len(candidates) // 2])
+    return {
+        task_id: {
+            "dynamic": task_id in selected,
+            "video_model_called": task_id in selected,
+            "rank": ranked.index(task_id) + 1,
+            "reason": (
+                "selected_deterministically_for_background_motion"
+                if task_id in selected
+                else "odd_batch_candidate_dropped_to_static"
+                if task_id == dropped
+                else "static_half_not_sent_to_video_model"
+            ),
+        }
+        for task_id in task_ids
+    }
+
+
+def make_layered_master(
+    poster_background: Path, poster_foreground: Path, output: Path,
+    background_output: Path, foreground_output: Path,
+) -> dict[str, Any]:
+    background = ImageOps.exif_transpose(Image.open(poster_background)).convert("RGB")
+    foreground = ImageOps.exif_transpose(Image.open(poster_foreground)).convert("RGBA")
+    if background.size != (2048, 2560) or foreground.size != (2048, 2560):
+        raise VideoGenerationError(f"Poster layers must both be 2048x2560: {background.size}, {foreground.size}")
+    canvas = ImageOps.fit(background, (1080, 1920), method=Image.Resampling.LANCZOS)
+    canvas = canvas.filter(ImageFilter.GaussianBlur(35))
+    canvas = Image.blend(canvas, Image.new("RGB", canvas.size, (8, 12, 16)), 0.35).convert("RGBA")
+    fitted_background = background.resize((1080, 1350), Image.Resampling.LANCZOS)
+    fitted_foreground = foreground.resize((1080, 1350), Image.Resampling.LANCZOS)
+    x, y = 0, 285
+    canvas.alpha_composite(fitted_background.convert("RGBA"), (x, y))
+    locked = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    locked.alpha_composite(fitted_foreground, (x, y))
+    master = canvas.copy()
+    master.alpha_composite(locked)
     output.parent.mkdir(parents=True, exist_ok=True)
-    background.save(output, "PNG")
+    canvas.convert("RGB").save(background_output, "PNG", optimize=True)
+    locked.save(foreground_output, "PNG", optimize=True)
+    master.convert("RGB").save(output, "PNG", optimize=True)
     return {
         "canvas": [1080, 1920],
-        "poster_box": [x, y, x + fitted.width, y + fitted.height],
-        "poster_source_size": list(foreground.size),
+        "poster_box": [x, y, 1080, 1635],
+        "poster_source_size": [2048, 2560],
+        "background_master": str(background_output),
+        "foreground_master": str(foreground_output),
         "cropped": False,
     }
 
 
-def make_exact_hook(master: Path, raw_motion: Path, output: Path, seconds: float = 4.0) -> None:
+def make_exact_hook(master: Path, raw_motion: Path, foreground: Path, output: Path, seconds: float = 4.0) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     if raw_motion.resolve() == output.resolve():
         raise VideoGenerationError(f"Raw Dreamina motion input and hook output are the same file: {output}")
@@ -140,18 +169,43 @@ def make_exact_hook(master: Path, raw_motion: Path, output: Path, seconds: float
         "[0:v]scale=1080:1920,trim=duration=0.12,setpts=PTS-STARTPTS,fps=30[still];"
         "[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
         f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,trim=duration={seconds - 0.12:.2f},"
-        "setpts=PTS-STARTPTS,fps=30[motion];[still][motion]concat=n=2:v=1:a=0[outv]"
+        "setpts=PTS-STARTPTS,fps=30[motion];"
+        f"[2:v]format=rgba,trim=duration={seconds - 0.12:.2f},setpts=PTS-STARTPTS,fps=30[fg];"
+        "[motion][fg]overlay=0:0:format=auto[locked];[still][locked]concat=n=2:v=1:a=0[outv]"
     )
     subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-i", str(master),
-            "-i", str(raw_motion), "-filter_complex", filter_graph, "-map", "[outv]", "-t", str(seconds),
+            "-i", str(raw_motion), "-loop", "1", "-i", str(foreground),
+            "-filter_complex", filter_graph, "-map", "[outv]", "-t", str(seconds),
             "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
             "-movflags", "+faststart", str(output),
         ],
         check=True,
         timeout=300,
     )
+
+
+def locked_foreground_rms(master: Path, frame: Path, foreground: Path) -> float:
+    expected = Image.open(master).convert("RGB")
+    actual = Image.open(frame).convert("RGB").resize(expected.size, Image.Resampling.LANCZOS)
+    mask = Image.open(foreground).convert("RGBA").getchannel("A")
+    difference = ImageChops.difference(expected, actual)
+    channels = [ImageStat.Stat(channel, mask=mask).rms[0] for channel in difference.split()]
+    return sum(value * value for value in channels) ** 0.5 / len(channels) ** 0.5
+
+
+def validate_layered_hook(hook: Path, master: Path, foreground: Path) -> dict[str, Any]:
+    values = []
+    with tempfile.TemporaryDirectory(prefix="jaguartv-hook-qa-") as directory:
+        for index, second in enumerate((0.0, 2.0, 3.9)):
+            frame = Path(directory) / f"frame-{index}.png"
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(second), "-i", str(hook), "-frames:v", "1", str(frame)],
+                check=True, timeout=60,
+            )
+            values.append(locked_foreground_rms(master, frame, foreground))
+    return {"foreground_rms": [round(value, 3) for value in values], "foreground_stable": max(values) < 20.0}
 
 
 def submit_dreamina_hook(master: Path, prompt: str, video_config: dict[str, Any]) -> str:
@@ -223,44 +277,57 @@ def generate_apimart_hook(
     timeout_seconds: int = 900,
     poll_interval: int = 5,
 ) -> dict[str, Any]:
+    state_path = output.with_suffix(".apimart-retry.json")
+    try:
+        return retry_forever(
+            lambda: _generate_apimart_hook_once(
+                master, prompt, route, output, state_path,
+                timeout_seconds=timeout_seconds, poll_interval=poll_interval,
+            ),
+            state_path=state_path, operation_name=f"video:{output.stem}",
+        )
+    except Exception as error:
+        raise VideoGenerationError(f"APIMart video failed permanently: {_sanitize(str(error))}") from error
+
+
+def _generate_apimart_hook_once(
+    master: Path, prompt: str, route: dict[str, Any], output: Path, state_path: Path,
+    *, timeout_seconds: int, poll_interval: int,
+) -> dict[str, Any]:
     provider_id = str(route.get("provider_id") or "apimart")
     model_id = str(route.get("model_id") or "wan2.6-i2v-flash")
     base_url = resolve_base_url(route)
     api_key = resolve_secret(route)
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        with master.open("rb") as image:
-            response = requests.post(
-                f"{base_url}/uploads/images",
-                headers=headers,
-                files={"file": (master.name, image, "image/png")},
-                timeout=120,
-            )
-        upload = _response_json(response, "image upload")
-        image_url = upload.get("url") or (upload.get("data") or {}).get("url")
-        if not image_url:
-            raise VideoGenerationError("APIMart image upload returned no URL")
-        # APIMart rejects reference image URLs that contain unescaped whitespace
-        # ("encode spaces as %20"). Our poster-derived file names legitimately contain
-        # spaces, and the upload response mirrors that name into the URL, so encode it.
-        image_url = requests.utils.requote_uri(str(image_url))
-
-        response = requests.post(
-            f"{base_url}/videos/generations",
-            headers={**headers, "Content-Type": "application/json"},
-            json={
-                "model": model_id,
-                "prompt": prompt,
-                "image_urls": [image_url],
-                "resolution": route.get("resolution", "720p"),
-                "duration": int(route.get("generation_seconds", 4)),
-            },
-            timeout=120,
-        )
-        submission = _response_json(response, "video submission")
-        task_id = _apimart_task_id(submission)
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
+        task_id = str(state.get("provider_task_id") or "")
         if not task_id:
-            raise VideoGenerationError("APIMart video submission returned no task ID")
+            with master.open("rb") as image:
+                response = requests.post(
+                    f"{base_url}/uploads/images", headers=headers,
+                    files={"file": (master.name, image, "image/png")}, timeout=120,
+                )
+            upload = _response_json(response, "image upload")
+            image_url = upload.get("url") or (upload.get("data") or {}).get("url")
+            if not image_url:
+                raise VideoGenerationError("APIMart image upload returned no URL")
+            image_url = requests.utils.requote_uri(str(image_url))
+
+            response = requests.post(
+                f"{base_url}/videos/generations",
+                headers={**headers, "Content-Type": "application/json"},
+                json={
+                    "model": model_id, "prompt": prompt, "image_urls": [image_url],
+                    "resolution": route.get("resolution", "720p"),
+                    "duration": int(route.get("generation_seconds", 4)),
+                }, timeout=120,
+            )
+            submission = _response_json(response, "video submission")
+            task_id = _apimart_task_id(submission)
+            if not task_id:
+                raise VideoGenerationError("APIMart video submission returned no task ID")
+            _write_state(state_path, {"provider_task_id": task_id, "provider_task_status": "polling"})
 
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
@@ -275,6 +342,9 @@ def generate_apimart_hook(
                 download = requests.get(video_url, timeout=180)
                 if not download.ok or not download.content:
                     raise VideoGenerationError(f"APIMart video download failed with HTTP {download.status_code}")
+                if len(download.content) < 20_000:
+                    _write_state(state_path, {"provider_task_id": "", "provider_task_status": "invalid_download"})
+                    raise VideoGenerationError("APIMart downloaded video is too small; task will be resubmitted")
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_bytes(download.content)
                 return {
@@ -287,6 +357,7 @@ def generate_apimart_hook(
                     "status": "ok",
                 }
             if status in {"failed", "cancelled", "error"}:
+                _write_state(state_path, {"provider_task_id": "", "provider_task_status": status})
                 raise VideoGenerationError(f"APIMart task failed: status={status}")
             time.sleep(poll_interval)
         raise VideoGenerationError(f"APIMart task {task_id} did not complete within {timeout_seconds}s")

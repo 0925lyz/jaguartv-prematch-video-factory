@@ -8,11 +8,14 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from jaguartv_prematch.collector import collect_fixtures, resolve_target_date, tomorrow_brasilia
+from jaguartv_prematch.competition import BrasileiraoMembership, competition_kind
 from jaguartv_prematch.config import FactoryConfig
 from jaguartv_prematch.image2 import _download_image_url, _verify_requested_size
-from jaguartv_prematch.pipeline import _caption_for, _predicted_score, run_phase1, run_phase3
+from jaguartv_prematch.pipeline import _caption_for, _predicted_score, _schedule_prompt_tasks, run_phase1, run_phase3
+from jaguartv_prematch.poster import _transparent_icon
 from jaguartv_prematch.records import Fixture
-from jaguartv_prematch.routing import CodexDeepSeekRouter, ProviderRoutingError
+from jaguartv_prematch.routing import CodexTextRouter, ProviderRoutingError
+from jaguartv_prematch.retry import retry_forever
 from jaguartv_prematch.selection import selection_reason
 from jaguartv_prematch.upload import _validated_base_url
 from jaguartv_prematch.video import (
@@ -20,6 +23,7 @@ from jaguartv_prematch.video import (
     _dreamina_raw_downloads,
     composition_duration,
     deterministic_batch_rotation,
+    deterministic_motion_plan,
     generate_apimart_hook,
     submit_dreamina_hook,
     video_filenames,
@@ -148,8 +152,14 @@ def test_high_value_competitions_are_selected_by_api_football_names():
     assert selection_reason(fixture(competition="UEFA Champions League - League Stage - 1")) == "target_competition"
     assert selection_reason(fixture(competition="CONMEBOL Libertadores - Quarter-finals")) == "target_competition"
     assert selection_reason(fixture(competition="CONMEBOL Sudamericana - Quarter-finals")) == "target_competition"
-    assert selection_reason(fixture(competition="Serie B - Regular Season - 27")) == "target_competition"
-    assert selection_reason(fixture(competition="Serie A - Regular Season - 27")) == "target_competition"
+
+
+def test_conmebol_competitions_prefer_ids_and_accept_normalized_aliases():
+    assert competition_kind(13, "odd upstream label") == "copa_libertadores"
+    assert competition_kind(11, "odd upstream label") == "copa_sudamericana"
+    assert competition_kind(None, "Taça Libertadores da América - Fase de grupos") == "copa_libertadores"
+    assert competition_kind(None, "Copa Sul-Americana - Quartas") == "copa_sudamericana"
+    assert competition_kind(None, "Serie A - Regular Season - 4", "Italy") is None
 
 
 def test_unrelated_competitions_still_fall_through():
@@ -173,7 +183,8 @@ def test_brasileirao_match_without_channel_data_is_still_selected():
         channels=(),
         featured=False,
     )
-    assert selection_reason(coritiba) == "target_competition"
+    membership = BrasileiraoMembership(2026, frozenset({123}), frozenset({"coritiba"}), "test")
+    assert selection_reason(coritiba, membership) == "brasileirao_team"
 
 
 def test_italian_serie_a_without_channel_data_is_not_selected():
@@ -218,13 +229,25 @@ def test_brazilian_club_check_uses_normalized_names():
         channels=(),
         featured=False,
     )
-    assert selection_reason(accented) == "target_competition"
+    membership = BrasileiraoMembership(2026, frozenset(), frozenset({"gremio"}), "test")
+    assert selection_reason(accented, membership) == "brasileirao_team"
 
 
-def test_router_rejects_cross_provider_model():
-    router = CodexDeepSeekRouter()
+def test_one_current_brasileirao_team_selects_any_competition_by_stable_id():
+    membership = BrasileiraoMembership(2026, frozenset({42}), frozenset(), "test")
+    away_member = fixture(
+        competition="Mundial de Clubes",
+        home_team_id=7,
+        away_team_id=42,
+        featured=False,
+    )
+    assert selection_reason(away_member, membership) == "brasileirao_team"
+
+
+def test_router_rejects_empty_model_route():
+    router = CodexTextRouter()
     with pytest.raises(ProviderRoutingError):
-        router.verify("unsupported-model")
+        router.verify("")
 
 
 def test_same_day_component_combinations_are_unique():
@@ -471,7 +494,7 @@ def test_apimart_hook_uses_required_model_parameters(monkeypatch, tmp_path):
     def fake_get(url, **kwargs):
         if "/tasks/" in url:
             return Response({"data": {"status": "completed", "result": {"videos": [{"url": ["https://cdn.example/hook.mp4"]}]}}})
-        return Response(content=b"mp4")
+        return Response(content=b"0" * 20_001)
 
     monkeypatch.setattr("jaguartv_prematch.video.resolve_secret", lambda route: "secret")
     monkeypatch.setattr("jaguartv_prematch.video.requests.post", fake_post)
@@ -489,7 +512,7 @@ def test_apimart_hook_uses_required_model_parameters(monkeypatch, tmp_path):
 
     result = generate_apimart_hook(master, "animate", route, output)
 
-    assert output.read_bytes() == b"mp4"
+    assert output.stat().st_size == 20_001
     assert submitted == {
         "model": "wan2.6-i2v-flash",
         "prompt": "animate",
@@ -536,7 +559,7 @@ def test_phase1_uses_manual_fixture_file_when_collector_fails(tmp_path):
     manual.write_text(json.dumps({"fixtures": [fixture(competition="Campeonato Brasileiro Série A", home_team="Santos").to_dict()]}, ensure_ascii=False), encoding="utf-8")
     config = FactoryConfig(Path("test"), {
         "collector": {"base_url": "http://127.0.0.1:1/api/v1/fixtures", "timeout_seconds": 1},
-        "text": {"provider_id": "deepseek", "primary_model_id": "deepseek-v4-flash", "fallback_model_id": "deepseek-v4-pro"},
+        "text": {"provider_id": "current-task", "primary_model_id": "current-task", "fallback_model_id": "current-task"},
         "image": {"model_id": "gpt-image-2", "primary": {}, "fallback": {}},
         "video": {"provider_id": "operator-dreamina-vip", "model_id": "seedance2.0fast_vip"},
         "publishing": {"inventory_label": "赛前预测"},
@@ -556,17 +579,41 @@ def test_phase3_dry_run_creates_4x5_posters(tmp_path):
     )
     config = FactoryConfig(Path("test"), {
         "collector": {"base_url": "http://127.0.0.1:1/api/v1/fixtures"},
-        "text": {"provider_id": "deepseek", "primary_model_id": "deepseek-v4-flash", "fallback_model_id": "deepseek-v4-pro"},
+        "text": {"provider_id": "current-task", "primary_model_id": "current-task", "fallback_model_id": "current-task"},
         "image": {"model_id": "gpt-image-2", "size": "1024x1280", "primary": {}, "fallback": {}},
         "video": {"provider_id": "operator-dreamina-vip", "model_id": "seedance2.0fast_vip"},
         "publishing": {"inventory_label": "赛前预测"},
     })
     result = run_phase3(config, tmp_path / "run", dry_run=True)
     assert result["poster_count"] == 2
-    assert result["items"][0]["fixed_logo_overlay"]["logo_sha256"]
+    assert result["items"][0]["compose"]["logo_sha256"]
+    assert result["items"][0]["compose"]["all_content_in_bounds"] is True
     from PIL import Image
     with Image.open(result["items"][0]["poster"]) as poster:
-        assert poster.size == (1024, 1280)
+        assert poster.size == (2048, 2560)
+    with Image.open(result["items"][0]["foreground"]) as foreground:
+        assert foreground.size == (2048, 2560)
+        assert foreground.mode == "RGBA"
+        assert foreground.getchannel("A").getbbox()
+
+
+def test_schedule_pages_are_capped_at_eight_matches():
+    fixtures = [fixture(fixture_id=f"f-{index}").to_dict() for index in range(9)]
+    pages = _schedule_prompt_tasks(fixtures)
+    assert [len(page["fixtures"]) for page in pages] == [8, 1]
+    assert len({page["id"] for page in pages}) == 2
+
+
+def test_channel_icon_edge_matte_is_transparent_without_erasing_center(tmp_path):
+    from PIL import Image, ImageDraw
+
+    source = tmp_path / "channel.png"
+    icon = Image.new("RGBA", (80, 50), (0, 0, 0, 255))
+    ImageDraw.Draw(icon).rectangle((20, 12, 60, 38), fill=(255, 255, 255, 255))
+    icon.save(source)
+    cleaned = _transparent_icon(source, (80, 50))
+    assert cleaned.getpixel((0, 0))[3] == 255
+    assert cleaned.width < 80 and cleaned.height < 50
 
 
 def test_image_size_guard_rejects_wrong_aspect_ratio(tmp_path):
@@ -588,42 +635,46 @@ def test_image_size_guard_accepts_4x5_canvases(tmp_path):
         _verify_requested_size(poster, "1024x1280")
 
 
-def test_schedule_channel_band_stays_compact_for_a_single_match(tmp_path):
-    """A one-match agenda must not paint the channel mask over most of the poster."""
-    from PIL import Image
-
-    from jaguartv_prematch.pipeline import ROOT, _apply_schedule_channel_logos
-
-    poster = tmp_path / "schedule.png"
-    Image.new("RGB", (1000, 1250), (255, 255, 255)).save(poster)
-    fixtures = [{"fixture_id": "f-1", "kickoff_at_brt": "21:30", "channels": ["ESPN"]}]
-
-    _apply_schedule_channel_logos(poster, fixtures, ROOT / "assets" / "channels")
-
-    with Image.open(poster) as image:
-        band_left = round(image.width * 0.79)
-        # y=80% used to sit inside the oversized single-row mask; it must stay untouched now.
-        assert image.convert("RGB").getpixel((band_left + 8, round(image.height * 0.80))) == (255, 255, 255)
+def test_motion_plan_is_reproducible_and_calls_video_for_exactly_half():
+    even = deterministic_motion_plan(["a", "b", "c", "d"], "2026-09-15")
+    odd = deterministic_motion_plan(["a", "b", "c", "d", "e"], "2026-09-15")
+    assert even == deterministic_motion_plan(["a", "b", "c", "d"], "2026-09-15")
+    assert sum(item["video_model_called"] for item in even.values()) == 2
+    assert sum(item["video_model_called"] for item in odd.values()) == 2
+    assert sum(item["reason"] == "odd_batch_candidate_dropped_to_static" for item in odd.values()) == 1
 
 
-def test_schedule_channel_band_still_covers_a_full_agenda(tmp_path):
-    from PIL import Image
+def test_apimart_retry_persists_transient_failure_and_stops_on_auth(tmp_path):
+    state = tmp_path / "retry.json"
+    calls = []
 
-    from jaguartv_prematch.pipeline import ROOT, _apply_schedule_channel_logos
+    def transient_then_success():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("HTTP 503 temporary service error")
+        return "ok"
 
-    poster = tmp_path / "schedule.png"
-    Image.new("RGB", (1000, 1250), (255, 255, 255)).save(poster)
-    fixtures = [
-        {"fixture_id": f"f-{i}", "kickoff_at_brt": f"{10 + i}:00", "channels": ["ESPN"]}
-        for i in range(9)
-    ]
-
-    _apply_schedule_channel_logos(poster, fixtures, ROOT / "assets" / "channels")
-
-    with Image.open(poster) as image:
-        band_left = round(image.width * 0.79)
-        # 9 rows keep the original evenly-divided geometry: the band still reaches deep.
-        assert image.convert("RGB").getpixel((band_left + 8, round(image.height * 0.88))) != (255, 255, 255)
+    assert retry_forever(
+        transient_then_success, state_path=state, operation_name="test", base_delay=0,
+        sleeper=lambda _delay: None,
+    ) == "ok"
+    assert json.loads(state.read_text(encoding="utf-8"))["status"] == "succeeded"
+    with pytest.raises(RuntimeError, match="HTTP 401"):
+        retry_forever(
+            lambda: (_ for _ in ()).throw(RuntimeError("HTTP 401 invalid API key")),
+            state_path=tmp_path / "auth.json", operation_name="auth", base_delay=0,
+            sleeper=lambda _delay: None,
+        )
+    resume = tmp_path / "resume.json"
+    resume.write_text(json.dumps({
+        "status": "retry_wait", "attempt": 4, "next_retry_at": "2099-01-01T00:00:00+00:00",
+    }), encoding="utf-8")
+    resumed_delays = []
+    assert retry_forever(
+        lambda: "resumed", state_path=resume, operation_name="resume",
+        sleeper=resumed_delays.append,
+    ) == "resumed"
+    assert resumed_delays and resumed_delays[0] > 0
 
 
 def _fake_lark_proc(message_id: str):

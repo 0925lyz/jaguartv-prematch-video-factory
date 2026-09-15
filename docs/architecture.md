@@ -7,16 +7,19 @@ not modify or vendor the separate video-creation-automation repository.
 ## Pipeline boundaries
 
 1. `collector.py` reads the configured local tomorrow-fixtures service and stores its raw payload.
-2. `selection.py` applies featured-match rules. A five-major-league match qualifies through a
-   Brazilian player only when current membership evidence has populated
-   `verified_brazilian_players`.
+2. `selection.py` identifies API-Football competitions by stable league ID, then controlled
+   normalized aliases. Current-season Brasileirão Série A membership comes from API-Football
+   league/team relations; any fixture with one member club qualifies regardless of competition.
 3. Research records must retain URL, platform, timestamps, excerpt, normalized summary, and
    confidence before poster generation begins.
-4. Prompt generation uses the configured DeepSeek provider. Image generation is a separate
+4. Prompt generation uses the current task model unless an available provider/model is explicitly configured. Image generation is a separate
    primary/fallback route and records the route actually used.
-5. Poster jobs fail closed when current licensed player, crest, kit, channel-icon, or logo assets
-   are missing. Schedule posters contain at most eight fixtures per page.
-6. Video jobs generate only the poster image and an exact 4-second dynamic poster hook.
+5. Image2 produces only the photographic background. The deterministic poster compositor writes
+   all text, channel icons, and the exact Figure 1 JaguarTV logo into a 2048x2560 PNG and retains a
+   matching transparent foreground layer. Required assets fail closed.
+6. Exactly `floor(N/2)` poster backgrounds, selected by a stable hash, enter the video model for
+   four seconds. Other posters use a local four-second still. The locked foreground is composited
+   back over every generated background frame.
    Dreamina/Jimeng VIP Seedance is primary; APIMart `wan2.6-i2v-flash` at 720p/4s is the
    recorded fallback. The middle section plays two distinct operation-class videos in full,
    followed by the selected motion CTA in full. Final duration is therefore dynamic. Music is
@@ -39,6 +42,7 @@ not modify or vendor the separate video-creation-automation repository.
 ## Failure contract
 
 Every failed phase reports the operation, provider or file, sanitized error, attempted checks,
-last verified artifact, and then stops. No provider substitution occurs outside the explicitly
-configured text, Image2, and video fallback chains. Secrets are read from environment variables or the
-operator's existing authenticated tools and are excluded from manifests and logs.
+last verified artifact, and next retry time. Transient APIMart failures persist task/retry state and
+retry with exponential backoff and jitter; deterministic authentication, parameter, safety, and
+asset errors stop with diagnosis. No provider substitution occurs outside the explicitly configured
+chains. Secrets stay outside manifests and logs.
