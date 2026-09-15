@@ -21,7 +21,7 @@ This is the canonical workflow for `0925lyz/jaguartv-prematch-video-factory`. Us
 6. Select exactly half of each poster batch by stable hash (`floor(N/2)`, with one odd-batch candidate recorded as dropped from motion). Send only selected clean backgrounds to Dreamina/Jimeng VIP Seedance for four seconds, with APIMart `wan2.6-i2v-flash` 720p/4s as the explicit fallback. Non-selected posters become local four-second stills. Reapply the locked foreground frame-for-frame, then play both operation clips and the CTA in full.
 7. Discover repository-local operation MP4, CTA MP4, music, and CTA WAV files automatically. Rotate all four pools independently in stable filename order. Persist reservations in `runtime/media-rotation.json`; advance only after the final video passes validation. Music loops when short and is trimmed to the exact video duration. No TTS or media generation is used for music or voice.
 8. Name final video artifacts in manifest order with `01`, `02`, `03` prefixes. Captions follow the same order.
-9. Build `captions.json` in pt-BR. Every caption must contain the exact sentence `Acesse jaguartvbrasil.com/baixar-app para baixar.` and exactly five hashtags including `#jaguartv` and `#iptv`; `#jaguartvbrasil` is optional.
+9. Build concise `captions.json` copy in natural pt-BR. Every caption contains the exact sentence `Acesse jaguartvbrasil.com/baixar-app para baixar.` and exactly five short, relevant hashtags including `#jaguartv` and `#iptv`. Record that TikTok commercial-content disclosure and the applicable AIGC label are required.
 10. Upload only validated final videos to Pending Review under `赛前预测`. Do not auto-approve or publish.
 
 ## Daily delivery

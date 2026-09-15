@@ -1,5 +1,6 @@
 import json
 import http.client
+import re
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from jaguartv_prematch.collector import collect_fixtures, resolve_target_date, t
 from jaguartv_prematch.competition import BrasileiraoMembership, competition_kind
 from jaguartv_prematch.config import FactoryConfig
 from jaguartv_prematch.image2 import _download_image_url, _verify_requested_size
-from jaguartv_prematch.pipeline import _caption_for, _predicted_score, _schedule_prompt_tasks, run_phase1, run_phase3
+from jaguartv_prematch.pipeline import _caption_for, _hashtags, _predicted_score, _schedule_prompt_tasks, run_phase1, run_phase3
 from jaguartv_prematch.poster import _transparent_icon
 from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexTextRouter, ProviderRoutingError
@@ -366,8 +367,10 @@ def test_captions_change_between_batches(tmp_path):
     )
     items = [{"task_id": "fixture-1", "kind": "single"}]
 
-    batch1 = task1_driver._captions_for_batch(run_dir, items, 1)["items"][0]["description"]
-    batch2 = task1_driver._captions_for_batch(run_dir, items, 2)["items"][0]["description"]
+    batch1_payload = task1_driver._captions_for_batch(run_dir, items, 1)
+    batch2_payload = task1_driver._captions_for_batch(run_dir, items, 2)
+    batch1 = batch1_payload["items"][0]["description"]
+    batch2 = batch2_payload["items"][0]["description"]
 
     assert batch1 != batch2
     assert "Santos x Palmeiras" in batch1
@@ -375,6 +378,8 @@ def test_captions_change_between_batches(tmp_path):
     assert "Acesse jaguartvbrasil.com/baixar-app para baixar." in batch1
     assert "#jaguartv" in batch1
     assert "#iptv" in batch1
+    assert batch1_payload["tiktok_policy"]["commercial_content_disclosure_required"] is True
+    assert batch1_payload["tiktok_policy"]["ai_generated_content_label_required"] is True
 
 
 def test_predicted_score_line_keeps_the_away_team(tmp_path):
@@ -415,8 +420,28 @@ def test_caption_has_exactly_five_hashtags_with_marketing(tmp_path):
     assert len(hashtags) == 5
     assert "#jaguartv" in hashtags
     assert "#iptv" in hashtags
+    assert hashtags[:3] == ["#santos", "#palmeiras", "#brasileirao"]
+    assert all(re.fullmatch(r"#[a-z0-9]{1,20}", tag) for tag in hashtags)
+    assert caption["title"] == "Santos x Palmeiras: palpite 1 x 2 e onde assistir"
+    assert len(caption["description"]) <= 360
     assert "Jaguar TV" in caption["description"]
     assert "Acesse jaguartvbrasil.com/baixar-app para baixar." in caption["description"]
+    assert "7 dias grátis" not in caption["description"]
+    assert "sem travamentos" not in caption["description"]
+    assert "transmissão liberada" not in caption["description"].lower()
+
+
+def test_caption_tags_compact_long_names_without_cutting_random_letters():
+    hashtags = _hashtags(
+        "Clube Atlético Mineiro SAF",
+        "Associação Desportiva Ferroviária Vale do Rio Doce",
+        "UEFA Champions League - League Phase",
+    )
+    assert len(hashtags) == 5
+    assert "#championsleague" in hashtags
+    assert hashtags[-2:] == ["#jaguartv", "#iptv"]
+    assert all(re.fullmatch(r"#[a-z0-9]{1,20}", tag) for tag in hashtags)
+    assert "#brasileirao" not in _hashtags("Inter", "Milan", "Serie A")
 
 
 def test_composition_duration_uses_full_video_lengths(monkeypatch):

@@ -530,6 +530,10 @@ def _check_duration(path: Path, expected: float) -> None:
 
 
 WEEKDAY_PT = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo")
+DOWNLOAD_SENTENCE = "Acesse jaguartvbrasil.com/baixar-app para baixar."
+TIKTOK_CAPTION_LIMIT = 360
+TIKTOK_TITLE_LIMIT = 100
+REQUIRED_HASHTAGS = ("#jaguartv", "#iptv")
 
 
 def _captions(run_dir: Path, items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -540,6 +544,11 @@ def _captions(run_dir: Path, items: list[dict[str, Any]]) -> dict[str, Any]:
         "schema_version": "jaguartv-prematch-captions-v1",
         "language": "pt-BR",
         "timezone_label": "Horário de Brasília",
+        "tiktok_policy": {
+            "commercial_content_disclosure_required": True,
+            "ai_generated_content_label_required": True,
+            "max_hashtags": 5,
+        },
         "items": [_caption_for(run_dir, item, fixtures, date_iso) for item in items],
         "fixture_count": len(fixtures),
     }
@@ -547,59 +556,114 @@ def _captions(run_dir: Path, items: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _caption_for(run_dir: Path, item: dict[str, Any], fixtures: list[dict[str, Any]], date_iso: str) -> dict[str, Any]:
     weekday = WEEKDAY_PT[datetime.fromisoformat(date_iso).weekday()]
-    date_pt = _date_long_pt(date_iso)
     if item.get("kind") == "schedule" or not _fixture_for(run_dir, item["task_id"]):
-        rows = "; ".join(
-            f"{fx['home_team']} x {fx['away_team']} ({fx['kickoff_at_brt']})"
-            for fx in sorted(fixtures, key=lambda row: str(row.get("kickoff_at_brt", "")))
-        )
         hashtags = ["#futebol", "#brasileirao", "#palpites", "#jaguartv", "#iptv"]
+        body = (
+            f"🗓️ Agenda de {weekday}: {len(fixtures)} jogos para ficar de olho. "
+            "Confira os confrontos e horários no vídeo. Jaguar TV no Android e TV Box."
+        )
         return {
             "task_id": item["task_id"],
-            "title": f"Agenda de {weekday} na JaguarTV",
-            "description": (
-                f"🗓️ Agenda de {weekday}: {rows}. 7 dias grátis no Jaguar TV, TV ao vivo no Android e TV Box! "
-                f"Acesse jaguartvbrasil.com/baixar-app para baixar. {' '.join(hashtags)}"
-            ),
+            "title": _short_text(f"Jogos de {weekday}: horários e onde assistir", TIKTOK_TITLE_LIMIT),
+            "description": _tiktok_caption(body, hashtags),
             "hashtags": hashtags,
         }
 
     fx = _fixture_for(run_dir, item["task_id"]) or {}
     home, away = str(fx.get("home_team")), str(fx.get("away_team"))
-    channels = " / ".join(fx.get("channels") or ["Jaguar TV"])
     competition = str(fx.get("competition") or "")
     score = _predicted_score(run_dir, item["task_id"])
     tactical = _tactical_point(run_dir, item["task_id"])
     hashtags = _hashtags(home, away, competition)
-    hook = f"🔥 É HOJE! {home} x {away} às {fx.get('kickoff_at_brt')}, {competition}."
-    description = (
-        f"{hook} Palpite JaguarTV: {score}. {tactical} "
-        "Vem ver ao vivo no Jaguar TV 📺 Acesse jaguartvbrasil.com/baixar-app para baixar. "
-        f"{' '.join(hashtags)}"
-    ).replace("  ", " ").strip()
+    score_only = _score_only(score)
+    prediction = f"{home} {score_only} {away}" if score_only else score
+    tactical_copy = _short_text(tactical, 90)
+    body = (
+        f"🔥 Jogaço hoje: {home} x {away}, às {fx.get('kickoff_at_brt')}, pela {competition}. "
+        f"Meu palpite: {prediction}."
+        f"{(' ' + tactical_copy.rstrip('.') + '.') if tactical_copy else ''} "
+        "Quer acompanhar? Jaguar TV no Android e TV Box."
+    )
     return {
         "task_id": item["task_id"],
-        "title": f"Palpite JaguarTV: {home} x {away}",
-        "description": description,
+        "title": _prematch_title(home, away, score_only),
+        "description": _tiktok_caption(body, hashtags),
         "hashtags": hashtags,
     }
 
 
 def _hashtags(home: str, away: str, competition: str) -> list[str]:
-    tags = [f"#{_tag(home)}", f"#{_tag(away)}", f"#{_tag(competition)}", "#jaguartv", "#iptv"]
-    unique = []
-    for tag in tags:
-        if tag and tag not in unique:
-            unique.append(tag)
-    while len(unique) < 5:
-        unique.insert(-2, "#palpites")
-    return unique[:3] + ["#jaguartv", "#iptv"]
+    candidates = [
+        _compact_hashtag(home),
+        _compact_hashtag(away),
+        _competition_hashtag(competition),
+        "#futebol",
+        "#palpites",
+    ]
+    selected: list[str] = []
+    for tag in candidates:
+        if tag not in selected and tag not in REQUIRED_HASHTAGS:
+            selected.append(tag)
+        if len(selected) == 3:
+            break
+    return selected + list(REQUIRED_HASHTAGS)
 
 
 def _tag(value: str) -> str:
     value = value.lower()
     replacements = str.maketrans({"á": "a", "à": "a", "ã": "a", "â": "a", "é": "e", "ê": "e", "í": "i", "ó": "o", "ô": "o", "õ": "o", "ú": "u", "ü": "u", "ç": "c"})
     return re.sub(r"[^a-z0-9]+", "", value.translate(replacements)) or "futebol"
+
+
+def _compact_hashtag(value: str) -> str:
+    translated = value.lower().translate(str.maketrans({"á": "a", "à": "a", "ã": "a", "â": "a", "é": "e", "ê": "e", "í": "i", "ó": "o", "ô": "o", "õ": "o", "ú": "u", "ü": "u", "ç": "c"}))
+    ignored = {"associacao", "club", "clube", "da", "das", "de", "do", "dos", "ec", "esporte", "fc", "football", "futebol", "saf", "sc"}
+    words = [word for word in re.findall(r"[a-z0-9]+", translated) if word not in ignored]
+    joined = "".join(words)
+    if joined and len(joined) <= 20:
+        return f"#{joined}"
+    short = next((word for word in words if len(word) <= 20), "futebol")
+    return f"#{short}"
+
+
+def _competition_hashtag(value: str) -> str:
+    slug = _tag(value)
+    aliases = (
+        (("championsleague", "ligadoscampeoes"), "#championsleague"),
+        (("libertadores",), "#libertadores"),
+        (("sudamericana", "sulamericana"), "#sulamericana"),
+        (("brasileirao", "campeonatobrasileiro"), "#brasileirao"),
+        (("copadobrasil",), "#copadobrasil"),
+        (("premierleague",), "#premierleague"),
+    )
+    for names, hashtag in aliases:
+        if any(name in slug for name in names):
+            return hashtag
+    return _compact_hashtag(value)
+
+
+def _score_only(score: str) -> str:
+    found = re.search(r"\b(\d+)\s*[xX]\s*(\d+)\b", score)
+    return f"{found.group(1)} x {found.group(2)}" if found else ""
+
+
+def _short_text(value: str, limit: int) -> str:
+    value = " ".join(str(value).split())
+    if len(value) <= limit:
+        return value
+    shortened = value[: limit - 3].rsplit(" ", 1)[0].rstrip(".,:;!?")
+    return f"{shortened or value[:limit - 3]}..."
+
+
+def _prematch_title(home: str, away: str, score: str) -> str:
+    prediction = f": palpite {score}" if score else ": palpite e onde assistir"
+    suffix = " e onde assistir" if score else ""
+    return _short_text(f"{home} x {away}{prediction}{suffix}", TIKTOK_TITLE_LIMIT)
+
+
+def _tiktok_caption(body: str, hashtags: list[str]) -> str:
+    suffix = f" {DOWNLOAD_SENTENCE} {' '.join(hashtags)}"
+    return f"{_short_text(body, TIKTOK_CAPTION_LIMIT - len(suffix))}{suffix}"
 
 
 def _predicted_score(run_dir: Path, task_id: str) -> str:

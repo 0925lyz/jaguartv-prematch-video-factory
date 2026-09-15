@@ -70,3 +70,7 @@ backend is a stop condition, not permission to generate placeholders. Production
 fixture payload, research evidence, prompt, provider route records, image QA, video task ID,
 component filenames and cycle positions, captions, build manifest, upload ID, and server verification result under one
 date-scoped run directory.
+
+TikTok drafts use a short Brazilian Portuguese matchup hook, prediction and CTA, with exactly five
+compact relevant hashtags. `#jaguartv` and `#iptv` remain mandatory. The caption manifest marks the
+commercial-content disclosure and applicable AI-generated-content label as required at publication.

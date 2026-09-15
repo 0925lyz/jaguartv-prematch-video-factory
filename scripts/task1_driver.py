@@ -63,11 +63,15 @@ from jaguartv_prematch.pipeline import (  # noqa: E402
     _fixture_for,
     _hashtags,
     _loop_video,
+    _prematch_title,
     _predicted_score,
     _prediction_block,
     _run_date_iso,
+    _score_only,
+    _short_text,
     _tactical_point,
     _task_id,
+    _tiktok_caption,
     _upload_metadata,
     _yyMMdd,
     _zh,
@@ -674,51 +678,53 @@ def _captions_for_batch(run_dir: Path, items: list[dict], batch: int) -> dict:
     weekday = WEEKDAY_PT[datetime.fromisoformat(date_iso).weekday()]
     out_items = []
     schedule_templates = [
-        "🗓️ Agenda de {weekday}: {rows}. TV ao vivo no Jaguar TV para Android e TV Box. {download} {hashtags}",
-        "📺 Guia JaguarTV de {weekday}: {rows}. Escolhe teu jogo e acompanha no Android ou TV Box. {download} {hashtags}",
-        "🔥 Programação pronta para {weekday}: {rows}. Tudo no Jaguar TV, com app para Android e TV Box. {download} {hashtags}",
-        "⚽ Cola na agenda de {weekday}: {rows}. Pré-jogo, bola rolando e TV ao vivo no Jaguar TV. {download} {hashtags}",
+        "🗓️ Agenda de {weekday}: {count} jogos para ficar de olho. Confira os confrontos e horários no vídeo. Jaguar TV no Android e TV Box.",
+        "📺 Bora organizar a rodada? São {count} jogos nesta {weekday}. Veja a agenda no vídeo e acompanhe pelo Jaguar TV.",
+        "🔥 Programação pronta: {count} jogos nesta {weekday}. Dá o play, escolha o confronto e acompanhe no Jaguar TV.",
+        "⚽ Tem bola rolando nesta {weekday}: {count} jogos na agenda. Confira os horários no vídeo e acompanhe no Jaguar TV.",
     ]
     match_templates = [
-        "🔥 É HOJE! {home} x {away} às {kickoff}, {competition}. Palpite JaguarTV: {score}. {tactical} Vem ver ao vivo no Jaguar TV 📺 {download} {hashtags}",
-        "⚡ Tá chegando! {home} x {away} entra em campo às {kickoff} por {competition}. Meu palpite: {score}. {tactical} Assiste no Jaguar TV. {download} {hashtags}",
-        "👀 Jogo com cara de tensão: {home} x {away}, {kickoff}, {competition}. Palpite JaguarTV: {score}. {tactical} Acompanha ao vivo no Jaguar TV. {download} {hashtags}",
-        "🚨 Anota esse confronto: {home} x {away} às {kickoff}, {competition}. Placar projetado: {score}. {tactical} Jaguar TV no Android e TV Box. {download} {hashtags}",
-        "🎯 Pré-jogo JaguarTV: {home} x {away}, {kickoff}, {competition}. Palpite do dia: {score}. {tactical} Quer ver ao vivo? {download} {hashtags}",
-        "📌 Fica de olho: {home} x {away} às {kickoff}, {competition}. Leitura JaguarTV: {score}. {tactical} {download} {hashtags}",
+        "🔥 Jogaço hoje: {home} x {away}, às {kickoff}, pela {competition}. Meu palpite: {prediction}.{tactical} Quer acompanhar? Jaguar TV no Android e TV Box.",
+        "⚡ Tá chegando: {home} x {away}, às {kickoff}, pela {competition}. Palpite do dia: {prediction}.{tactical} Acompanhe no Jaguar TV.",
+        "👀 Olho nesse duelo: {home} x {away}, às {kickoff}, pela {competition}. Minha leitura: {prediction}.{tactical} Jaguar TV no Android e TV Box.",
+        "🚨 Anota o confronto: {home} x {away}, às {kickoff}, pela {competition}. Placar projetado: {prediction}.{tactical} Acompanhe no Jaguar TV.",
+        "🎯 Pré-jogo: {home} x {away}, às {kickoff}, pela {competition}. Meu palpite: {prediction}.{tactical} Quer acompanhar? Jaguar TV.",
+        "📌 Fica de olho: {home} x {away}, às {kickoff}, pela {competition}. Palpite: {prediction}.{tactical} Acompanhe no Jaguar TV.",
     ]
     for item in items:
         task_id = str(item["task_id"])
         fx = _fixture_for(run_dir, task_id) or {}
         if item.get("kind") == "schedule" or not fx:
-            rows = "; ".join(f"{f['home_team']} x {f['away_team']} ({f['kickoff_at_brt']})"
-                             for f in sorted(fixtures, key=lambda r: str(r.get("kickoff_at_brt", ""))))
             hashtags = ["#futebol", "#brasileirao", "#palpites", "#jaguartv", "#iptv"]
             template = _caption_choice(run_dir, batch, task_id, schedule_templates)
-            out_items.append({"task_id": task_id, "title": f"Agenda de {weekday} na JaguarTV",
-                              "description": template.format(weekday=weekday, rows=rows, download="Acesse jaguartvbrasil.com/baixar-app para baixar.", hashtags=" ".join(hashtags)),
+            body = template.format(weekday=weekday, count=len(fixtures))
+            out_items.append({"task_id": task_id, "title": _short_text(f"Jogos de {weekday}: horários e onde assistir", 100),
+                              "description": _tiktok_caption(body, hashtags),
                               "hashtags": hashtags})
             continue
         home, away = str(fx.get("home_team")), str(fx.get("away_team"))
         competition = str(fx.get("competition") or "")
         score = _predicted_score(run_dir, task_id)
-        tactical = _tactical_point(run_dir, task_id)
+        score_only = _score_only(score)
+        prediction = f"{home} {score_only} {away}" if score_only else score
+        tactical = _short_text(_tactical_point(run_dir, task_id), 90)
         hashtags = _hashtags(home, away, competition)
         template = _caption_choice(run_dir, batch, task_id, match_templates)
-        description = template.format(
+        body = template.format(
             home=home,
             away=away,
             kickoff=fx.get("kickoff_at_brt"),
             competition=competition,
-            score=score,
-            tactical=tactical,
-            download="Acesse jaguartvbrasil.com/baixar-app para baixar.",
-            hashtags=" ".join(hashtags),
+            prediction=prediction,
+            tactical=f" {tactical.rstrip('.')}." if tactical else "",
         ).replace("  ", " ").strip()
-        out_items.append({"task_id": task_id, "title": f"Palpite JaguarTV: {home} x {away}",
-                          "description": description, "hashtags": hashtags})
+        out_items.append({"task_id": task_id, "title": _prematch_title(home, away, score_only),
+                          "description": _tiktok_caption(body, hashtags), "hashtags": hashtags})
     return {"schema_version": "jaguartv-prematch-captions-v1", "language": "pt-BR",
-            "timezone_label": "Horário de Brasília", "batch": batch, "items": out_items,
+            "timezone_label": "Horário de Brasília", "batch": batch,
+            "tiktok_policy": {"commercial_content_disclosure_required": True,
+                               "ai_generated_content_label_required": True, "max_hashtags": 5},
+            "items": out_items,
             "fixture_count": len(fixtures)}
 
 

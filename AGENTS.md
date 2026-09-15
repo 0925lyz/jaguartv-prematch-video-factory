@@ -41,6 +41,17 @@ These rules apply to every task and automation in this repository.
 - The package CLI may be used for isolated phase debugging only; daily production must not call
   `jaguartv-prematch run` directly.
 
+## Publish copy
+
+- Write concise pt-BR copy in a natural Brazilian football voice: matchup hook, editorial prediction,
+  one short tactical point when available, Jaguar TV prompt, and the fixed download sentence.
+- TikTok copy uses exactly five relevant hashtags. Keep `#jaguartv` and `#iptv`; prefer compact team
+  and popular competition tags for the other three. Never slice a long phrase into a meaningless tag.
+- Do not claim `transmissão liberada`, `sem travamentos`, a free trial, or another offer unless that
+  exact claim is verified for the run.
+- TikTok publishing must enable the commercial-content disclosure and the AI-generated-content label
+  when the realistic poster or hook is AI-generated. Caption manifests record both requirements.
+
 ## Production safety
 
 - Stop at the first unavailable required integration and report the sanitized error.
