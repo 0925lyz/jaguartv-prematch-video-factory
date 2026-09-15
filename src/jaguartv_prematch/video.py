@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import itertools
 import json
-import random
 import re
 import subprocess
 import tempfile
@@ -56,54 +54,6 @@ def video_filenames(poster_path: str | Path, source_seconds: int = 4, sequence: 
         "final": f"final-{stem}.mp4",
         "cover": f"cover-{stem}-1080x1920.jpg",
     }
-
-
-def deterministic_rotation(date_brt: str, fixture_id: str, pools: dict[str, list[str]]) -> dict[str, str]:
-    seed = int(hashlib.sha256(f"{date_brt}:{fixture_id}".encode()).hexdigest(), 16)
-    selection: dict[str, str] = {}
-    offset = 0
-    for category in ("operation", "interface", "cta", "music", "voice"):
-        values = pools.get(category, [])
-        if not values:
-            raise VideoGenerationError(f"Empty component pool: {category}")
-        selection[category] = values[(seed + offset) % len(values)]
-        offset += 1
-    return selection
-
-
-def deterministic_batch_rotation(
-    date_brt: str,
-    fixture_ids: list[str],
-    pools: dict[str, list[str]],
-) -> dict[str, dict[str, str]]:
-    categories = ("operation", "interface", "cta", "music", "voice")
-    for category in categories:
-        if not pools.get(category):
-            raise VideoGenerationError(f"Empty component pool: {category}")
-    middle_pairs = [(a, b) for a in pools["operation"] for b in pools["interface"] if a != b]
-    if not middle_pairs:
-        raise VideoGenerationError("Component pools need at least two distinct operation-class videos")
-    other_combinations = list(itertools.product(pools["cta"], pools["music"], pools["voice"]))
-    combinations = list(itertools.product(middle_pairs, other_combinations))
-    if len(fixture_ids) > len(combinations):
-        raise VideoGenerationError("Component pools cannot provide unique same-day combinations")
-
-    rng = random.Random(hashlib.sha256(date_brt.encode()).hexdigest())
-    shuffled_fixture_ids = list(fixture_ids)
-    shuffled_combinations = list(combinations)
-    rng.shuffle(shuffled_fixture_ids)
-    rng.shuffle(shuffled_combinations)
-
-    selected: dict[str, dict[str, str]] = {}
-    for fixture_id, (middle_pair, other) in zip(shuffled_fixture_ids, shuffled_combinations):
-        selected[fixture_id] = {
-            "operation": middle_pair[0],
-            "interface": middle_pair[1],
-            "cta": other[0],
-            "music": other[1],
-            "voice": other[2],
-        }
-    return selected
 
 
 def deterministic_motion_plan(task_ids: list[str], seed: str) -> dict[str, dict[str, Any]]:
@@ -373,11 +323,36 @@ def media_duration(path: str | Path) -> float:
     return float(result.stdout.strip())
 
 
-def composition_duration(components: dict[str, str], hook_seconds: float = 4.0, static_cta_seconds: float = 3.0) -> float:
+def composition_duration(components: dict[str, str], hook_seconds: float = 4.0) -> float:
     middle = media_duration(components["operation"]) + media_duration(components["interface"])
     cta_path = Path(components["cta"])
-    cta = media_duration(cta_path) if cta_path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"} else static_cta_seconds
+    cta = media_duration(cta_path)
     return hook_seconds + middle + cta
+
+
+def validate_av_duration(path: Path, expected: float, tolerance: float = 0.12) -> dict[str, float]:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,duration",
+            "-of", "json", str(path),
+        ],
+        capture_output=True, text=True, check=True, timeout=30,
+    )
+    payload = json.loads(result.stdout)
+    container = float(payload["format"]["duration"])
+    durations = {
+        stream["codec_type"]: float(stream.get("duration") or container)
+        for stream in payload.get("streams", [])
+        if stream.get("codec_type") in {"video", "audio"}
+    }
+    if set(durations) != {"video", "audio"}:
+        raise VideoGenerationError(f"Final video must contain video and audio streams: {path.name}")
+    if abs(durations["video"] - expected) > tolerance or abs(durations["audio"] - durations["video"]) > tolerance:
+        raise VideoGenerationError(
+            f"Final A/V duration mismatch for {path.name}: expected={expected:.3f} "
+            f"video={durations['video']:.3f} audio={durations['audio']:.3f}"
+        )
+    return {"video": durations["video"], "audio": durations["audio"]}
 
 
 def compose_v7(
@@ -401,7 +376,9 @@ def compose_v7(
     result = subprocess.run(command, cwd=repository, capture_output=True, text=True, check=False, timeout=900)
     if result.returncode != 0:
         raise VideoGenerationError(_sanitize(result.stderr or result.stdout or "compose-video failed"))
-    return composition_duration(components)
+    expected = composition_duration(components)
+    validate_av_duration(output, expected)
+    return expected
 
 
 def write_build_manifest(path: Path, payload: dict[str, Any]) -> None:

@@ -1,20 +1,17 @@
 # Bundled Asset Provenance
 
-The following assets were copied from operator-supplied, already-authorized project resources on
-2026-09-02. No assets were downloaded during repository consolidation.
+The production media inventories were replaced from the operator-supplied local folders on
+2026-09-15. No media was downloaded or generated during the replacement.
 
 - `assets/brand/jaguartv-logo.png`: supplied JaguarTV Figure 1 logo.
 - `assets/channels/`: official broadcast-channel icons from the existing `image2数据库` inventory.
-- `assets/video/operation/`: approved operation and main-interface modules from
-  `jaguartv-v7-pack`.
-- `assets/video/cta/`: approved CTA motion and static inventory from `jaguartv-v7-pack`.
-- `assets/audio/music/`: V7 music inventory; license/source rows are retained in
-  `docs/music-licenses.csv`.
-- `assets/audio/voiceover/`: existing authorized local WAVs plus the reusable APIMart nova and
-  shimmer pt-BR CTA voices. Daily production rotates this inventory and does not regenerate it.
+- `assets/video/operation/`: every MP4 from the supplied `中间操作类素材` folder.
+- `assets/video/cta/motion/`: every MP4 from the supplied `最后CTA素材` folder.
+- `assets/audio/music/`: every MP3/M4A audio file from the supplied `音频/背景音乐` folder.
+- `assets/audio/voiceover/`: every WAV from the supplied `音频/CTA口播` folder.
 
-`docs/v7-asset-manifest.csv` retains the source pack's asset records. The generated
-`docs/bundled-assets.sha256` file provides repository-level content hashes.
+Runtime discovery ignores README, JSON transcript, manifest, and static-image files. Production
+does not call TTS or another generation service for music or CTA voice.
 
 Player photographs, club crests, and current-season kits are intentionally not bulk-vendored into
 Git. They remain in the licensed `image2数据库`, and each production run must copy only validated

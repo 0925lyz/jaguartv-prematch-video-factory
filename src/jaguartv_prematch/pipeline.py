@@ -15,19 +15,26 @@ from .collector import FixtureCollectionError, collect_fixtures, load_fixture_fi
 from .competition import membership_from_fixtures
 from .config import FactoryConfig
 from .image2 import generate_image2, save_image_route_manifest
+from .media_inventory import (
+    commit_rotation,
+    discard_stale_pending,
+    discover_inventory,
+    inventory_fingerprint,
+    reserve_rotation,
+)
 from .poster import compose_poster, prepare_background
 from .selection import select_fixtures
 from .upload import upload_pending_review
 from .video import (
     VideoGenerationError,
     compose_v7,
-    deterministic_batch_rotation,
     deterministic_motion_plan,
     download_dreamina_result,
     generate_apimart_hook,
     make_exact_hook,
     make_layered_master,
     submit_dreamina_hook,
+    validate_av_duration,
     validate_layered_hook,
     video_filenames,
 )
@@ -251,11 +258,29 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         _write_json(phase_dir / "build-manifest.json", report)
         return report
 
-    pools = _component_pools(ROOT)
-    rotations = deterministic_batch_rotation(_run_date(run_dir), [item["task_id"] for item in posters], pools)
+    inventory = discover_inventory(ROOT / "assets")
+    inventory_id = inventory_fingerprint(inventory)
+    rotation_state = ROOT / "runtime" / "media-rotation.json"
+    usage_ids = {
+        item["task_id"]: f"prematch:{run_dir.name}:{item['task_id']}:{inventory_id[:16]}"
+        for item in posters
+    }
+    discard_stale_pending(rotation_state, set(usage_ids.values()))
     motion_plan = deterministic_motion_plan([item["task_id"] for item in posters], _run_date(run_dir))
     items = []
     for sequence, item in enumerate(posters, 1):
+        usage_id = usage_ids[item["task_id"]]
+        reservation = reserve_rotation(
+            rotation_state, inventory, usage_id, operation_count=2, fingerprint=inventory_id,
+        )
+        selected = reservation["components"]
+        components = {
+            "operation": selected["operation"][0],
+            "interface": selected["operation"][1],
+            "cta": selected["cta"],
+            "music": selected["music"],
+            "voice": selected["voice"],
+        }
         poster = Path(item["poster"])
         names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)), sequence)
         out = phase_dir / names["media_stem"]
@@ -305,16 +330,18 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         layer_qa = validate_layered_hook(hook, master, foreground_master)
         if not layer_qa["foreground_stable"]:
             raise RuntimeError(f"locked foreground changed during hook for {item['task_id']}: {layer_qa}")
-        final_seconds = compose_v7(ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
+        final_seconds = compose_v7(ROOT, master=master, hook=hook, output=final, components=components)
         _check_duration(final, final_seconds)
-        items.append({
+        av_duration = validate_av_duration(final, final_seconds)
+        completed_item = {
             "task_id": item["task_id"],
             "generation_scope": "only poster image and 4-second poster hook are generated; all later segments are reused local assets",
             "sequence": sequence,
             "generated_seconds": 4,
             "final_seconds": round(final_seconds, 3),
+            "audio_duration_qa": {**av_duration, "matches_video": abs(av_duration["audio"] - av_duration["video"]) <= 0.12},
             "middle_segment_policy": "operation-class videos play in full before CTA",
-            "audio_policy": "APIMart-generated pt-BR CTA voice inventory only",
+            "audio_policy": "local authorized music and CTA voice inventory only",
             "poster": str(poster),
             "master": str(master),
             "hook": str(hook),
@@ -327,9 +354,16 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
             "foreground_master": str(foreground_master),
             "motion_selection": motion_plan[item["task_id"]],
             "layer_qa": layer_qa,
-            "components": rotations[item["task_id"]],
+            "components": components,
+            "media_inventory_fingerprint": inventory_id,
+            "asset_rotation": reservation,
             "video_generation": generation,
-        })
+        }
+        items.append(completed_item)
+        _write_json(phase_dir / "build-manifest.json", {"status": "PHASE4_IN_PROGRESS", "items": items})
+        commit_rotation(rotation_state, usage_id)
+        completed_item["asset_rotation"]["committed"] = True
+        _write_json(phase_dir / "build-manifest.json", {"status": "PHASE4_IN_PROGRESS", "items": items})
     captions = _captions(run_dir, items)
     _write_json(phase_dir / "captions.json", captions)
     manifest = {
@@ -472,18 +506,6 @@ def _dry_research(fixture: dict[str, Any]) -> dict[str, Any]:
             "confidence": "dry-run",
         }],
     }
-
-
-def _component_pools(root: Path) -> dict[str, list[str]]:
-    operation = sorted(str(path) for path in (root / "assets/video/operation").glob("*.mp4") if "master" not in path.name.lower())
-    if len(operation) < 2:
-        operation = sorted(str(path) for path in (root / "assets/video/operation").glob("*.mp4"))
-    cta = sorted(str(path) for path in (root / "assets/video/cta").glob("**/*") if path.suffix.lower() == ".mp4")
-    if not cta:
-        cta = sorted(str(path) for path in (root / "assets/video/cta").glob("**/*") if path.suffix.lower() in {".jpg", ".jpeg", ".png"})
-    music = sorted(str(path) for path in (root / "assets/audio/music").glob("*") if path.suffix.lower() in {".mp3", ".m4a", ".wav"})
-    voice = sorted(str(path) for path in (root / "assets/audio/voiceover").glob("*apimart*.wav"))
-    return {"operation": operation, "interface": operation, "cta": cta, "music": music, "voice": voice}
 
 
 def _motion_prompt(item: dict[str, Any], master: Path) -> str:

@@ -46,6 +46,13 @@ from jaguartv_prematch.image2 import (  # noqa: E402
     generate_image2,
     save_image_route_manifest,
 )
+from jaguartv_prematch.media_inventory import (  # noqa: E402
+    commit_rotation,
+    discard_stale_pending,
+    discover_inventory,
+    inventory_fingerprint,
+    reserve_rotation,
+)
 from jaguartv_prematch.pipeline import (  # noqa: E402
     ANTI_FIGURE,
     CREST_SAFETY,
@@ -53,7 +60,6 @@ from jaguartv_prematch.pipeline import (  # noqa: E402
     WEEKDAY_PT,
     _check_duration,
     _colors,
-    _component_pools,
     _fixture_for,
     _hashtags,
     _loop_video,
@@ -70,13 +76,13 @@ from jaguartv_prematch.poster import compose_poster, prepare_background  # noqa:
 from jaguartv_prematch.upload import UploadError, upload_pending_review  # noqa: E402
 from jaguartv_prematch.video import (  # noqa: E402
     compose_v7,
-    deterministic_batch_rotation,
     deterministic_motion_plan,
     download_dreamina_result,
     generate_apimart_hook,
     make_exact_hook,
     make_layered_master,
     submit_dreamina_hook,
+    validate_av_duration,
     validate_layered_hook,
     video_filenames,
     VideoGenerationError,
@@ -465,13 +471,31 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
         _write_json(phase_dir / "build-manifest.json", report)
         return report
 
-    pools = _component_pools(REPO_ROOT)
-    rotations = deterministic_batch_rotation(date_seed, [i["task_id"] for i in posters], pools)
+    inventory = discover_inventory(REPO_ROOT / "assets")
+    inventory_id = inventory_fingerprint(inventory)
+    rotation_state = REPO_ROOT / "runtime" / "media-rotation.json"
+    usage_ids = {
+        item["task_id"]: f"prematch:{run_dir.name}:{item['task_id']}:{inventory_id[:16]}"
+        for item in posters
+    }
+    discard_stale_pending(rotation_state, set(usage_ids.values()))
     motion_plan = deterministic_motion_plan([i["task_id"] for i in posters], date_seed)
     resume_items = {str(i.get("task_id")): i for i in _load_phase4_resume_items(phase_dir)}
     items = []
     total = len(posters)
     for seq, item in enumerate(posters, 1):
+        usage_id = usage_ids[item["task_id"]]
+        reservation = reserve_rotation(
+            rotation_state, inventory, usage_id, operation_count=2, fingerprint=inventory_id,
+        )
+        selected = reservation["components"]
+        components = {
+            "operation": selected["operation"][0],
+            "interface": selected["operation"][1],
+            "cta": selected["cta"],
+            "music": selected["music"],
+            "voice": selected["voice"],
+        }
         poster = Path(item["poster"])
         names = video_filenames(poster, int(config.data["video"].get("generation_seconds", 4)), seq)
         out = phase_dir / names["media_stem"]
@@ -482,7 +506,14 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
         final = out / names["final"]
         cover = out / names["cover"]
         existing = resume_items.get(str(item["task_id"]))
-        if existing and _valid_media(Path(str(existing.get("final", "")))):
+        if (
+            existing
+            and existing.get("media_inventory_fingerprint") == inventory_id
+            and existing.get("components") == components
+            and _valid_media(Path(str(existing.get("final", ""))))
+        ):
+            commit_rotation(rotation_state, usage_id)
+            existing.setdefault("asset_rotation", reservation)["committed"] = True
             print(f"[phase4] {seq}/{total} video resume: {Path(existing['final']).name}", flush=True)
             items.append(existing)
             continue
@@ -590,17 +621,28 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
         layer_qa = validate_layered_hook(hook, master, foreground_master)
         if not layer_qa["foreground_stable"]:
             raise RuntimeError(f"locked foreground changed during hook for {item['task_id']}: {layer_qa}")
-        final_seconds = compose_v7(REPO_ROOT, master=master, hook=hook, output=final, components=rotations[item["task_id"]])
+        final_seconds = compose_v7(REPO_ROOT, master=master, hook=hook, output=final, components=components)
         _check_duration(final, final_seconds)
-        items.append({
+        av_duration = validate_av_duration(final, final_seconds)
+        completed_item = {
             "task_id": item["task_id"], "kind": item.get("kind"), "sequence": seq, "poster": str(poster),
             "master": str(master), "hook": str(hook), "final": str(final), "cover": str(cover),
             "cover_source": "full poster master", "motion_prompt": str(motion_path), "master_info": master_info,
             "generated_seconds": 4, "final_seconds": round(final_seconds, 3),
+            "audio_duration_qa": {**av_duration, "matches_video": abs(av_duration["audio"] - av_duration["video"]) <= 0.12},
             "motion_selection": motion_plan[item["task_id"]], "layer_qa": layer_qa,
             "background_master": str(background_master), "foreground_master": str(foreground_master),
-            "components": rotations[item["task_id"]], "video_generation": generation,
+            "components": components, "video_generation": generation,
+            "media_inventory_fingerprint": inventory_id,
+            "asset_rotation": reservation,
+        }
+        items.append(completed_item)
+        _write_json(phase_dir / "build-manifest.partial.json", {
+            "ok": True, "status": "PHASE4_IN_PROGRESS", "video_count": len(items),
+            "expected_video_count": total, "date_seed": date_seed, "batch": batch, "items": items,
         })
+        commit_rotation(rotation_state, usage_id)
+        completed_item["asset_rotation"]["committed"] = True
         _write_json(phase_dir / "build-manifest.partial.json", {
             "ok": True, "status": "PHASE4_IN_PROGRESS", "video_count": len(items),
             "expected_video_count": total, "date_seed": date_seed, "batch": batch, "items": items,

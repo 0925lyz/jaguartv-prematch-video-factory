@@ -26,6 +26,9 @@ These rules apply to every task and automation in this repository.
 - Generate exactly the opening 4-second poster hook. Play each selected operation-class video
   and motion CTA in full; the final duration is their actual combined duration, not a fixed 12 seconds.
   Middle clips, CTA, music, and voiceover must come from existing authorized inventory.
+- Discover the four repository-local media pools automatically and rotate operation, CTA, music,
+  and voice independently. Persist positions and advance them only after final validation. Never
+  call TTS or another generation service for music or CTA voice.
 - Text, image, and video provider selections are independent.
 
 ## Execution entrypoint

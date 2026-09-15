@@ -22,7 +22,6 @@ from jaguartv_prematch.video import (
     VideoGenerationError,
     _dreamina_raw_downloads,
     composition_duration,
-    deterministic_batch_rotation,
     deterministic_motion_plan,
     generate_apimart_hook,
     submit_dreamina_hook,
@@ -248,45 +247,6 @@ def test_router_rejects_empty_model_route():
     router = CodexTextRouter()
     with pytest.raises(ProviderRoutingError):
         router.verify("")
-
-
-def test_same_day_component_combinations_are_unique():
-    pools = {
-        "operation": ["downloader", "search"],
-        "interface": ["epg"],
-        "cta": ["cta-a", "cta-b"],
-        "music": ["music-a"],
-        "voice": ["voice-a", "voice-b"],
-    }
-    selected = deterministic_batch_rotation("2026-09-03", ["a", "b", "c", "d"], pools)
-    combinations = [tuple(item.values()) for item in selected.values()]
-    assert len(combinations) == len(set(combinations))
-
-
-def test_middle_slots_use_distinct_operation_assets():
-    pools = {
-        "operation": ["op-a", "op-b"],
-        "interface": ["op-a", "op-b"],
-        "cta": ["cta"],
-        "music": ["music"],
-        "voice": ["voice"],
-    }
-    selected = deterministic_batch_rotation("2026-09-03", ["fixture"], pools)
-    item = selected["fixture"]
-    assert item["operation"] != item["interface"]
-
-
-def test_middle_visual_pairs_rotate_before_audio_only_changes():
-    pools = {
-        "operation": ["op-a", "op-b", "op-c"],
-        "interface": ["op-a", "op-b", "op-c"],
-        "cta": ["cta"],
-        "music": ["music"],
-        "voice": ["voice-a", "voice-b"],
-    }
-    selected = deterministic_batch_rotation("2026-09-03", ["a", "b", "c"], pools)
-    pairs = {(item["operation"], item["interface"]) for item in selected.values()}
-    assert len(pairs) == 3
 
 
 def test_video_filenames_use_manifest_sequence_prefix():

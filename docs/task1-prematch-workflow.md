@@ -19,7 +19,7 @@ This is the canonical workflow for `0925lyz/jaguartv-prematch-video-factory`. Us
 4. Generate Image2 poster prompts in English; visible poster text must be natural pt-BR. Image2 primary is the active `gpt-image-2` route; APIMart is the explicit fallback. If both fail, deliver prompts only and stop before video.
 5. Normalize every poster to 2048x2560 PNG. Compose text, authorized transparent channel icons, and the exact Figure 1 JaguarTV logo once in the poster stage; retain clean background and transparent locked foreground layers.
 6. Select exactly half of each poster batch by stable hash (`floor(N/2)`, with one odd-batch candidate recorded as dropped from motion). Send only selected clean backgrounds to Dreamina/Jimeng VIP Seedance for four seconds, with APIMart `wan2.6-i2v-flash` 720p/4s as the explicit fallback. Non-selected posters become local four-second stills. Reapply the locked foreground frame-for-frame, then play both operation clips and the CTA in full.
-7. Rotate downloader/search/interface clips, CTA, music, and voice deterministically. Same-day final videos must not reuse the same full component combination.
+7. Discover repository-local operation MP4, CTA MP4, music, and CTA WAV files automatically. Rotate all four pools independently in stable filename order. Persist reservations in `runtime/media-rotation.json`; advance only after the final video passes validation. Music loops when short and is trimmed to the exact video duration. No TTS or media generation is used for music or voice.
 8. Name final video artifacts in manifest order with `01`, `02`, `03` prefixes. Captions follow the same order.
 9. Build `captions.json` in pt-BR. Every caption must contain the exact sentence `Acesse jaguartvbrasil.com/baixar-app para baixar.` and exactly five hashtags including `#jaguartv` and `#iptv`; `#jaguartvbrasil` is optional.
 10. Upload only validated final videos to Pending Review under `赛前预测`. Do not auto-approve or publish.
@@ -33,7 +33,6 @@ This is the canonical workflow for `0925lyz/jaguartv-prematch-video-factory`. Us
 - For a forced third same-day version, call `scripts/task1_launcher.sh 3`. `auto` resumes the next
   incomplete/unfinished batch first, so it will keep returning to batch 2 until batch 2 has a
   `PHASE5_COMPLETE` automation summary.
-- The media delivery command can also build the consolidated `赛前海报视频` folder with `赛前海报`, `操作类`, and `cta` subfolders.
 - If a Lark/飞书 account adapter is configured, select one video plus its matching caption for the group before final delivery numbering. That sampled Lark video is not included in the final delivery folder, server upload, or all-caption order. If Lark is not configured, stop at that integration gate and report it.
 
 ## Quality gates

@@ -1,6 +1,0 @@
-Bora pro jogo! Sete dias grátis no Jaguar TV.
-
-Model: gpt-4o-mini-tts
-Voice: onyx
-API speed: 1.30
-Post-processing: tail trim, 1.20x tempo, compression, limiter, 48 kHz mono

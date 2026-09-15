@@ -6,7 +6,6 @@ import process from "node:process";
 import { tmpdir } from "node:os";
 
 const ROOT = path.resolve(process.cwd());
-const STATIC_CTA_SEC = 3;
 
 function parseArgs(argv) {
   const o = {};
@@ -40,24 +39,8 @@ const cta = path.resolve(opts.cta);
 const music = opts.music ? path.resolve(opts.music) : null;
 const voice = opts.voice ? path.resolve(opts.voice) : null;
 const hookVideo = opts["hook-video"] ? path.resolve(opts["hook-video"]) : null;
-const keypadCode = opts["keypad-code"] || "2252960";
-const DTMF = { 0:[941,1336],1:[697,1209],2:[697,1336],3:[697,1477],4:[770,1209],5:[770,1336],6:[770,1477],7:[852,1209],8:[852,1336],9:[852,1477] };
-const slot = 0.16;
-const tone = 0.09;
-const kpTerms = keypadCode.split("").map((d, i) => {
-  const [f1, f2] = DTMF[d] || DTMF[0];
-  return `(sin(2*PI*${f1}*t)+sin(2*PI*${f2}*t))*between(t\\,${(i * slot).toFixed(2)}\\,${(i * slot + tone).toFixed(2)})`;
-});
-const kpExpr = `0.3*(${kpTerms.join("+")})`;
-const kpDur = (keypadCode.length * slot).toFixed(2);
 const modules = (opts.modules || "").split(",").filter(Boolean).map((p) => path.resolve(p));
-const randomBefore = (opts["random-before"] || "").split(",").filter(Boolean).map((p) => path.resolve(p));
-let midModules = randomBefore.length ? [...modules] : modules;
-if (randomBefore.length) {
-  const picked = randomBefore[Math.floor(Math.random() * randomBefore.length)];
-  midModules = [picked, ...modules];
-  console.log(`[随机中段] ${path.basename(picked)}`);
-}
+const midModules = modules;
 const output = path.resolve(opts.output);
 const POSTER_SEC = Number(opts["poster-sec"]) || 4;
 for (const [label, p] of [["poster", poster], ["cta", cta], ...midModules.map((m, i) => [`module${i}`, m])]) {
@@ -67,14 +50,11 @@ if (hookVideo && !existsSync(hookVideo)) throw new Error(`hook-video not found: 
 if (music && !existsSync(music)) throw new Error(`music not found: ${music}`);
 if (voice && !existsSync(voice)) throw new Error(`voice not found: ${voice}`);
 
-// CTA may be a static image (default) or an animated video clip (e.g. motion CTA from lyz/cta).
-const ctaIsImage = !/\.(mp4|mov|webm|mkv)$/i.test(cta);
 const middleDurations = midModules.map(mediaDuration);
 const middleSec = middleDurations.reduce((sum, seconds) => sum + seconds, 0);
-const ctaSec = ctaIsImage ? STATIC_CTA_SEC : mediaDuration(cta);
+const ctaSec = mediaDuration(cta);
 const total = POSTER_SEC + middleSec + ctaSec;
 const ctaStart = POSTER_SEC + middleSec;
-const keypad = !!opts.keypad || /downloader/i.test(path.basename(midModules[0] || ""));
 const work = mkdtempSync(path.join(tmpdir(), "jaguartv-compose-"));
 
 try {
@@ -91,7 +71,7 @@ try {
     files.push(clip);
   });
   const ctaClip = path.join(work, "cta.mp4");
-  visualClip(cta, ctaClip, ctaSec, ctaIsImage);
+  visualClip(cta, ctaClip, ctaSec, false);
   files.push(ctaClip);
 
   writeFileSync(concatList, files.map((f) => `file '${f.replaceAll("'", "'\\''")}'`).join("\n") + "\n");
@@ -106,20 +86,12 @@ try {
       "-i", videoOnly,
       "-stream_loop", "-1", "-i", music,
     ];
-    let nextIdx = 2;
     const filters = [`[1:a]atrim=0:${total},asetpts=N/SR/TB,volume='if(gte(t,${ctaStart}),${ctaVol},${bodyVol})':eval=frame[bg]`];
     let amixIn = `[bg]`;
     let inputsN = 1;
-    if (keypad) {
-      inputs.push("-f", "lavfi", "-i", `aevalsrc=${kpExpr}:s=48000:d=${kpDur}`);
-      filters.push(`[${nextIdx}:a]adelay=${Math.round((POSTER_SEC + 0.2) * 1000)}|${Math.round((POSTER_SEC + 0.2) * 1000)},volume=0.85[kp]`);
-      amixIn += `[kp]`;
-      inputsN += 1;
-      nextIdx += 1;
-    }
     if (hasVoice) {
       inputs.push("-i", voice);
-      filters.push(`[${nextIdx}:a]atrim=0:${ctaSec},asetpts=N/SR/TB,adelay=${Math.round(ctaStart * 1000)}:all=1,volume=1.15[vo]`);
+      filters.push(`[2:a]atrim=0:${ctaSec},asetpts=N/SR/TB,adelay=${Math.round(ctaStart * 1000)}:all=1,volume=1.15[vo]`);
       amixIn += `[vo]`;
       inputsN += 1;
     }

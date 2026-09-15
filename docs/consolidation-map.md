@@ -9,7 +9,7 @@
 | Poster-only task | Image2 background plus deterministic factual overlay and QA | Unverified player substitutions |
 | Pre-match task | Lower prediction panel, readable cover copy, Figure 1 placement | Earlier dense text layouts |
 | Post-match task | Evidence schema, credential resolution, validation and upload verification patterns | Results, final-score wording and post-match selection semantics |
-| `jaguartv-v7-pack` | Compose script, operation clips, CTA, music, voice inventory, manifests | Generated run directories and duplicates |
+| Operator-supplied September 2026 media folders | Operation clips, CTA videos, music, and CTA voice inventory | README, JSON metadata, static CTA images, and removed legacy assets |
 | `jaguar视频二创` | Pending Review import contract and saved CTA inventory for delivery | Repository source modifications |
 
 The standalone repository does not import code from the original workspace at runtime. Player and

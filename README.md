@@ -15,9 +15,10 @@ untouched.
 - Image2 produces a clean background; exact text, channel icons, and the original Figure 1 logo are
   composited into a 2048x2560 PNG and saved as a locked foreground layer.
 - Exactly half of each poster batch is selected deterministically for a background-only 4-second
-  motion hook. Every unselected poster uses a local static 4-second hook. Two distinct operation-class
+  motion hook. Every unselected poster uses a local static 4-second hook. Two consecutive operation-class
   videos and the selected motion CTA then play in full, so final duration is content-driven.
-- SHA-256-deduplicated poster, operation-clip, and CTA delivery builder.
+- Repository-local operation, CTA, music, and CTA-voice inventories are discovered by media type and
+  rotated independently through `runtime/media-rotation.json`; positions advance only after validation.
 - Tests for timezone, selection rules, and provider/model rejection.
 - Prompt contracts and a research-evidence schema that fail closed on uncertain player assets.
 - Real-player face-off poster background method and text-overlay rules: see [docs/poster-master-prompt.md](docs/poster-master-prompt.md) and [docs/poster-production-rules.md](docs/poster-production-rules.md).
@@ -60,16 +61,6 @@ scripts/task1_launcher.sh 3 --skip-collect   # force a third same-day version fr
 daily production should not call `jaguartv-prematch run` directly because it bypasses the batch
 style rotation, Lark sample exclusion, and Desktop delivery rules.
 
-Build a media delivery folder by passing only the approved source roots:
-
-```bash
-jaguartv-prematch media-delivery \
-  --destination delivery/赛前海报视频 \
-  --poster-root /path/to/poster/output \
-  --video-root /path/to/final/videos \
-  --cta-root /path/to/approved/cta
-```
-
 See [docs/architecture.md](docs/architecture.md) for pipeline boundaries and provenance.
 
 ## Production gates
@@ -77,5 +68,5 @@ See [docs/architecture.md](docs/architecture.md) for pipeline boundaries and pro
 Run `preflight` before every production date. A blocked image route or unavailable research
 backend is a stop condition, not permission to generate placeholders. Production runs retain the
 fixture payload, research evidence, prompt, provider route records, image QA, video task ID,
-component rotation, captions, build manifest, upload ID, and server verification result under one
+component filenames and cycle positions, captions, build manifest, upload ID, and server verification result under one
 date-scoped run directory.

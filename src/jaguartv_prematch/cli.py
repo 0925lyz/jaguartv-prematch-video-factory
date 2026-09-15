@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 from .config import FactoryConfig
-from .media_delivery import build_delivery
 from .pipeline import default_run_dir, run_all, run_phase1, run_phase2, run_phase3, run_phase4, run_phase5
 from .preflight import run_preflight
 
@@ -34,11 +33,6 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--fixtures-file", type=Path)
         command.add_argument("--research-dir", type=Path)
 
-    delivery = commands.add_parser("media-delivery", help="Build the completed-media delivery folder")
-    delivery.add_argument("--destination", required=True, type=Path)
-    delivery.add_argument("--poster-root", action="append", type=Path, default=[])
-    delivery.add_argument("--video-root", action="append", type=Path, default=[])
-    delivery.add_argument("--cta-root", action="append", type=Path, default=[])
     return root
 
 
@@ -83,15 +77,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
-    if args.command == "media-delivery":
-        manifest = build_delivery(
-            args.destination,
-            poster_roots=args.poster_root,
-            video_roots=args.video_root,
-            cta_roots=args.cta_root,
-        )
-        print(json.dumps(manifest["counts"], ensure_ascii=False))
-        return 0
     return 2
 
 

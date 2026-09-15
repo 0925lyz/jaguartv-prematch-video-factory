@@ -10,6 +10,7 @@ from typing import Any
 
 from .config import FactoryConfig
 from .credentials import resolve_base_url, resolve_secret
+from .media_inventory import discover_inventory
 from .routing import CodexTextRouter
 from .runtime import resolve_command
 
@@ -66,11 +67,15 @@ def run_preflight(config: FactoryConfig, repository: Path) -> dict[str, Any]:
     required_assets = [
         repository / "assets/brand/jaguartv-logo.png",
         repository / "scripts/compose-video.mjs",
-        repository / "assets/video/operation/01-omni-downloader-enlarged-stable-3.0s.mp4",
-        repository / "assets/video/operation/02-omni-football-epg-stable-3.0s.mp4",
     ]
     for asset in required_assets:
         checks.append(Check(f"asset:{asset.name}", "ok" if asset.is_file() else "failed", str(asset)))
+    try:
+        inventory = discover_inventory(repository / "assets")
+        for category, paths in inventory.items():
+            checks.append(Check(f"inventory:{category}", "ok", f"{len(paths)} local files"))
+    except (FileNotFoundError, ValueError) as error:
+        checks.append(Check("inventory", "failed", str(error)))
 
     required_checks = [check for check in checks if check.name not in {"dreamina_vip_session", "video_fallback"}]
     video_ready = tier or fallback_ok

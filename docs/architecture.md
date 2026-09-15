@@ -21,10 +21,11 @@ not modify or vendor the separate video-creation-automation repository.
    four seconds. Other posters use a local four-second still. The locked foreground is composited
    back over every generated background frame.
    Dreamina/Jimeng VIP Seedance is primary; APIMart `wan2.6-i2v-flash` at 720p/4s is the
-   recorded fallback. The middle section plays two distinct operation-class videos in full,
+   recorded fallback. The middle section plays the next two operation-class videos in full,
    followed by the selected motion CTA in full. Final duration is therefore dynamic. Music is
-   reused from inventory; CTA voice comes from the reusable pt-BR voice inventory. Component
-   rotation is deterministic by Brasilia date plus fixture ID.
+   looped when necessary and trimmed to the exact video duration; CTA voice is trimmed to the CTA
+   window. Operation, CTA, music, and voice inventories rotate independently and persist under
+   `runtime/media-rotation.json`. A reservation advances only after the final video passes validation.
 7. Upload is a separate final gate. Only validated packages are sent to Pending Review under
    `赛前预测`; the pipeline never approves or publishes them.
 
@@ -36,8 +37,8 @@ not modify or vendor the separate video-creation-automation repository.
 - Pre-match tasks: player asset gating, lower prediction box, readable pt-BR copy, and 4:5 output.
 - Post-match task: reusable evidence schema, media validation, CTA audio inventory, and upload
   verification patterns only. Post-match wording and result semantics are not reused.
-- V7 pack: composition script, operation modules, CTA assets, music, licenses, voiceovers, and
-  build-manifest component accounting.
+- Operator-supplied local media: operation modules, CTA videos, music, voiceovers, and build-manifest
+  component accounting.
 
 ## Failure contract
 
