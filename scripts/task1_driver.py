@@ -76,7 +76,7 @@ from jaguartv_prematch.pipeline import (  # noqa: E402
     _yyMMdd,
     _zh,
 )
-from jaguartv_prematch.poster import compose_poster, prepare_background  # noqa: E402
+from jaguartv_prematch.poster import compose_poster, prepare_background, resolve_fixture_crests  # noqa: E402
 from jaguartv_prematch.upload import UploadError, upload_pending_review  # noqa: E402
 from jaguartv_prematch.video import (  # noqa: E402
     compose_v7,
@@ -163,13 +163,33 @@ def _sync_repo() -> None:
     if os.environ.get("JAGUARTV_SKIP_REPO_SYNC") == "1":
         print("[warn] repo sync skipped by JAGUARTV_SKIP_REPO_SYNC=1", flush=True)
         return
-    r = _run(["git", "-C", str(REPO), "pull", "--rebase", "origin", "main"], timeout=120)
+    status = _run(["git", "-C", str(REPO), "status", "--porcelain"], timeout=30)
+    if status.returncode != 0 or status.stdout.strip():
+        raise RuntimeError("repo sync blocked: WorkBuddy repository has uncommitted changes")
+    r = _run(["git", "-C", str(REPO), "pull", "--ff-only", "origin", "main"], timeout=120)
     if r.returncode != 0:
         raise RuntimeError(f"repo sync failed: {r.stderr or r.stdout}"[:800])
 
 
 def _valid_media(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
+
+
+def _poster_can_resume(existing: dict, task: dict, *, require_crests: bool) -> bool:
+    if not _valid_media(Path(str(existing.get("poster", "")))):
+        return False
+    if not require_crests:
+        return True
+    compose = existing.get("compose") or {}
+    expected = int(compose.get("required_crest_count") or (len(task.get("fixtures") or []) * 2 if task.get("kind") == "schedule" else 2))
+    crests = compose.get("crests") or []
+    return (
+        compose.get("crest_policy") == "required"
+        and len(crests) == expected
+        and all(Path(str(item.get("source", ""))).is_file() for item in crests)
+        and bool(compose.get("crest_text_clearance"))
+        and bool(compose.get("all_content_in_bounds"))
+    )
 
 
 def _load_phase4_resume_items(phase_dir: Path) -> list[dict]:
@@ -353,7 +373,9 @@ def _single_poster_prompt(fixture: dict, style_scene: str, home_stars: list[str]
         f"Players: photorealistic likeness of {p_home} and {p_home_b} in {home} current official kit "
         f"({_colors(home)}) framing the far LEFT edge, and {p_away} and {p_away_b} in {away} current "
         f"official kit ({_colors(away)}) framing the far RIGHT edge, waist-up, facing each other; they "
-        "must leave the top 30%, central information band, and bottom 38% visually quiet. "
+        "must keep every player head, face, hair and shoulders above y=620/2560 and outside the central "
+        "factual area (x=300..1748, y=820..1450) reserved for two official crests, team names and VS; "
+        "they must leave the top 30%, central information band, and bottom 38% visually quiet. "
         "Absolutely no readable text, digits, typography, UI panels, scoreboards, logos, crests, "
         "channel marks, sponsor marks, watermarks, or JaguarTV imagery. "
         f"{CREST_SAFETY} {ANTI_FIGURE}"
@@ -409,6 +431,8 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
         except Exception:
             existing_items = {}
 
+    crest_paths = resolve_fixture_crests(fixtures, phase_dir / "crests", required=not dry_run)
+
     items = []
     total = len(tasks)
     for index, task in enumerate(tasks, 1):
@@ -418,7 +442,7 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
         foreground_path = phase_dir / "foregrounds" / f"{task['id']}.png"
         poster_path = phase_dir / "posters" / task["filename"]
         existing = existing_items.get(str(task["id"]))
-        if existing and _valid_media(Path(str(existing.get("poster", "")))):
+        if existing and _poster_can_resume(existing, task, require_crests=not dry_run):
             print(f"[phase3] {index}/{total} poster resume: {poster_path.name}", flush=True)
             items.append(existing)
             continue
@@ -440,6 +464,8 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
             fixtures=task_fixtures, predictions=predictions,
             logo_path=REPO_ROOT / "assets" / "brand" / "jaguartv-logo.png",
             channels_root=REPO_ROOT / "assets" / "channels",
+            crest_paths=crest_paths,
+            require_crests=not dry_run,
         )
         items.append({
             "task_id": task["id"], "kind": task["kind"], "prompt": str(prompt_path),

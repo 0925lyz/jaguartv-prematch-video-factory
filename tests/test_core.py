@@ -13,7 +13,7 @@ from jaguartv_prematch.competition import BrasileiraoMembership, competition_kin
 from jaguartv_prematch.config import FactoryConfig
 from jaguartv_prematch.image2 import _download_image_url, _verify_requested_size
 from jaguartv_prematch.pipeline import _caption_for, _hashtags, _predicted_score, _schedule_prompt_tasks, run_phase1, run_phase3
-from jaguartv_prematch.poster import _transparent_icon
+from jaguartv_prematch.poster import _transparent_icon, compose_poster, resolve_fixture_crests
 from jaguartv_prematch.records import Fixture
 from jaguartv_prematch.routing import CodexTextRouter, ProviderRoutingError
 from jaguartv_prematch.retry import retry_forever
@@ -580,6 +580,63 @@ def test_phase3_dry_run_creates_4x5_posters(tmp_path):
         assert foreground.size == (2048, 2560)
         assert foreground.mode == "RGBA"
         assert foreground.getchannel("A").getbbox()
+
+
+def test_production_poster_requires_two_official_crests_and_keeps_names_clear(tmp_path):
+    with pytest.raises(RuntimeError, match="crest URL is missing"):
+        resolve_fixture_crests([fixture().to_dict()], tmp_path / "crests", required=True)
+
+    from PIL import Image
+
+    background = tmp_path / "background.png"
+    Image.new("RGB", (2048, 2560), (18, 40, 70)).save(background)
+    home_crest, away_crest = tmp_path / "home.png", tmp_path / "away.png"
+    Image.new("RGBA", (120, 120), (240, 30, 50, 255)).save(home_crest)
+    Image.new("RGBA", (120, 120), (30, 80, 220, 255)).save(away_crest)
+    fixture_data = fixture(home_team="A Long Home Club Name", away_team="Another Long Away Club").to_dict()
+    meta = compose_poster(
+        background, tmp_path / "poster.png", tmp_path / "foreground.png", kind="single",
+        fixtures=[fixture_data], predictions={},
+        logo_path=Path(__file__).resolve().parents[1] / "assets/brand/jaguartv-logo.png",
+        channels_root=Path(__file__).resolve().parents[1] / "assets/channels",
+        crest_paths={fixture_data["fixture_id"]: {"home": home_crest, "away": away_crest}},
+        require_crests=True,
+    )
+    assert len(meta["crests"]) == 2
+    assert meta["crest_text_clearance"] is True
+    assert meta["all_content_in_bounds"] is True
+
+
+def test_crestless_cached_production_poster_never_resumes(tmp_path):
+    poster = tmp_path / "poster.png"
+    poster.write_bytes(b"poster")
+    assert task1_driver._poster_can_resume(
+        {"poster": str(poster), "compose": {}}, {"kind": "single"}, require_crests=True,
+    ) is False
+
+
+def test_schedule_rows_keep_both_crests_and_team_names_separate(tmp_path):
+    from PIL import Image
+
+    background = tmp_path / "background.png"
+    Image.new("RGB", (2048, 2560), (18, 40, 70)).save(background)
+    crest = tmp_path / "crest.png"
+    Image.new("RGBA", (120, 120), (240, 30, 50, 255)).save(crest)
+    fixtures = [
+        fixture(fixture_id=f"fixture-{index}", home_team=f"Long Home Club {index}", away_team=f"Long Away Club {index}").to_dict()
+        for index in range(2)
+    ]
+    meta = compose_poster(
+        background, tmp_path / "schedule.png", tmp_path / "schedule-foreground.png", kind="schedule",
+        fixtures=fixtures, predictions={},
+        logo_path=Path(__file__).resolve().parents[1] / "assets/brand/jaguartv-logo.png",
+        channels_root=Path(__file__).resolve().parents[1] / "assets/channels",
+        crest_paths={item["fixture_id"]: {"home": crest, "away": crest} for item in fixtures},
+        require_crests=True,
+    )
+    assert len(meta["crests"]) == 4
+    assert meta["crest_text_clearance"] is True
+    assert meta["all_content_in_bounds"] is True
 
 
 def test_schedule_pages_are_capped_at_eight_matches():

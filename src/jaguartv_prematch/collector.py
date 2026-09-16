@@ -130,6 +130,8 @@ def _normalize_fixture(
         league_season=_optional_int(row.get("league_season") or league.get("season")),
         home_team_id=_optional_int(row.get("home_team_id") or home.get("id")),
         away_team_id=_optional_int(row.get("away_team_id") or away.get("id")),
+        home_crest_url=str(row.get("home_crest_url") or row.get("home_logo") or row.get("homeLogo") or home.get("logo") or "").strip(),
+        away_crest_url=str(row.get("away_crest_url") or row.get("away_logo") or row.get("awayLogo") or away.get("logo") or "").strip(),
         verified_brazilian_players=tuple(row.get("verified_brazilian_players", [])),
         raw=row,
     )

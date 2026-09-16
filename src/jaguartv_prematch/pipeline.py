@@ -22,7 +22,7 @@ from .media_inventory import (
     inventory_fingerprint,
     reserve_rotation,
 )
-from .poster import compose_poster, prepare_background
+from .poster import compose_poster, prepare_background, resolve_fixture_crests
 from .selection import select_fixtures
 from .upload import upload_pending_review
 from .video import (
@@ -209,6 +209,7 @@ def run_phase3(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
 
     tasks = [_single_prompt_task(item, run_dir) for item in fixtures]
     tasks.extend(_schedule_prompt_tasks(fixtures))
+    crest_paths = resolve_fixture_crests(fixtures, phase_dir / "crests", required=not dry_run)
     items = []
     for task in tasks:
         prompt_path = phase_dir / "prompts" / f"{task['id']}.txt"
@@ -233,6 +234,8 @@ def run_phase3(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
             predictions={_task_id(item): _prediction_block(item, run_dir) for item in task_fixtures},
             logo_path=ROOT / "assets/brand/jaguartv-logo.png",
             channels_root=ROOT / "assets/channels",
+            crest_paths=crest_paths,
+            require_crests=not dry_run,
         )
         items.append({
             "task_id": task["id"],
@@ -453,6 +456,8 @@ def _single_prompt_task(fixture: dict[str, Any], run_dir: Path) -> dict[str, str
         "Create a clean cinematic 4:5 pre-match football background only. "
         f"Visual context: {home} versus {away}, {fixture['competition']}. "
         f"Home kit colours: {_colors(home)}. Away kit colours: {_colors(away)}. "
+        "Keep every player head, face, hair and shoulders above y=620/2560 and outside the central factual area "
+        "(x=300..1748, y=820..1450); this area is reserved for two official crests, team names and VS. "
         "Leave the top 30%, center information band, and bottom 38% visually quiet. Absolutely no readable text, "
         "digits, typography, UI, panels, logos, crests, channel marks, sponsors, watermarks, or JaguarTV imagery."
     )

@@ -18,6 +18,10 @@ These rules apply to every task and automation in this repository.
 - The upper-right JaguarTV logo must be baked into the poster itself exactly once. Video compositing must not add a second logo overlay.
 - Image2 generates only the clean 4:5 background. Text, predictions, team information, channel icons,
   and the exact Figure 1 logo are composited deterministically into a 2048x2560 PNG foreground.
+- Every production match poster and schedule row must contain both verified official club crests. Resolve and
+  validate both crest files before Image2 output is accepted; a missing or corrupt crest is a stop condition,
+  never a reason to publish a crestless design. Keep team names at least 42px from crest boxes and reserve the
+  central factual zone for crests/names while player heads, faces, hair, and shoulders remain above it.
 - Video generation uses the authenticated Dreamina/Jimeng VIP Seedance route first. If it is
   unavailable, use only the configured APIMart `wan2.6-i2v-flash` fallback at 720p for 4 seconds
   and record both provider attempts.

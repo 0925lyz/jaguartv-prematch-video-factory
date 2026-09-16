@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import re
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +113,90 @@ def _transparent_icon(path: Path, size: tuple[int, int]) -> Image.Image:
     return image
 
 
+def _fixture_crest_url(fixture: dict[str, Any], side: str) -> str:
+    """Return only the provider-supplied official crest URL for one team."""
+    raw = fixture.get("raw") if isinstance(fixture.get("raw"), dict) else {}
+    teams = raw.get("teams") if isinstance(raw.get("teams"), dict) else {}
+    team = teams.get(side) if isinstance(teams.get(side), dict) else {}
+    candidates = (
+        fixture.get(f"{side}_crest_url"), fixture.get(f"{side}_logo"),
+        raw.get(f"{side}_crest_url"), raw.get(f"{side}_logo"), raw.get(f"{side}Logo"),
+        team.get("logo"), team.get("crest"),
+    )
+    return next(
+        (str(value).strip() for value in candidates if str(value or "").strip().startswith(("https://", "http://"))),
+        "",
+    )
+
+
+def ensure_crest(url: str, path: Path) -> Path:
+    """Cache one validated official crest without accepting an HTML/error payload."""
+    if path.is_file():
+        try:
+            with Image.open(path) as image:
+                image.verify()
+            return path
+        except (OSError, ValueError):
+            path.unlink(missing_ok=True)
+    request = urllib.request.Request(url, headers={"User-Agent": "JaguarTV-Prematch/1.0", "Accept": "image/*"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = response.read()
+        with Image.open(io.BytesIO(data)) as image:
+            image.verify()
+    except Exception as error:  # noqa: BLE001 - do not publish a poster with an unverified crest
+        raise RuntimeError(f"official crest unavailable: {url} ({type(error).__name__})") from error
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def resolve_fixture_crests(
+    fixtures: list[dict[str, Any]], crest_dir: Path, *, required: bool,
+) -> dict[str, dict[str, Path]]:
+    """Resolve both crests before composition; production never emits a crestless match poster."""
+    resolved: dict[str, dict[str, Path]] = {}
+    for fixture in fixtures:
+        fixture_id = str(fixture.get("fixture_id") or "").strip()
+        if not fixture_id:
+            raise RuntimeError("official crest resolution requires a fixture_id")
+        entries: dict[str, Path] = {}
+        for side in ("home", "away"):
+            url = _fixture_crest_url(fixture, side)
+            if not url:
+                if required:
+                    raise RuntimeError(f"official {side} crest URL is missing for {fixture_id}")
+                continue
+            entries[side] = ensure_crest(url, crest_dir / f"{fixture_id}-{side}.png")
+        if required and set(entries) != {"home", "away"}:
+            raise RuntimeError(f"both official crests are required for {fixture_id}")
+        resolved[fixture_id] = entries
+    return resolved
+
+
+def _crest_disc(layer: Image.Image, crest_path: Path, center: tuple[int, int], radius: int) -> list[int]:
+    draw = ImageDraw.Draw(layer)
+    box = [center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius]
+    draw.ellipse(box, fill=(247, 249, 247, 245), outline=GOLD, width=7)
+    crest = _transparent_icon(crest_path, (int(radius * 1.48), int(radius * 1.48)))
+    xy = (center[0] - crest.width // 2, center[1] - crest.height // 2)
+    layer.alpha_composite(crest, xy)
+    return box
+
+
+def _text_box(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, face: ImageFont.ImageFont, anchor: str = "mm") -> list[int]:
+    return list(draw.textbbox(xy, text, font=face, anchor=anchor, stroke_width=3))
+
+
+def _separate(first: list[int], second: list[int], clearance: int = 0) -> bool:
+    return (
+        first[2] + clearance <= second[0]
+        or second[2] + clearance <= first[0]
+        or first[3] + clearance <= second[1]
+        or second[3] + clearance <= first[1]
+    )
+
+
 def _channel_paths(labels: list[str], root: Path) -> list[Path]:
     paths: list[Path] = []
     for label in labels:
@@ -160,7 +246,8 @@ def prepare_background(raw: Path, output: Path) -> None:
 def compose_poster(
     background: Path, output: Path, foreground_output: Path, *, kind: str,
     fixtures: list[dict[str, Any]], predictions: dict[str, dict[str, str]],
-    logo_path: Path, channels_root: Path,
+    logo_path: Path, channels_root: Path, crest_paths: dict[str, dict[str, Path]] | None = None,
+    require_crests: bool = False,
 ) -> dict[str, Any]:
     base = Image.open(background).convert("RGBA")
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -169,6 +256,8 @@ def compose_poster(
     logo_xy = (W - logo.width - 54, 42)
     layer.alpha_composite(logo, logo_xy)
     placements: list[dict[str, Any]] = []
+    crest_placements: list[dict[str, Any]] = []
+    text_boxes: list[list[int]] = []
 
     if kind == "single":
         fixture = fixtures[0]
@@ -180,9 +269,23 @@ def compose_poster(
         _text(draw, (W // 2, 500), str(fixture.get("kickoff_at_brt", "")), _font(112))
         _text(draw, (W // 2, 580), "HORÁRIO DE BRASÍLIA", _font(34), GOLD)
         placements = _paste_channels(layer, list(fixture.get("channels") or []), channels_root, (W // 2, 700), 1100, 120)
-        _text(draw, (570, 1040), home.upper(), _fit(draw, home.upper(), 780, 76, 36))
-        _text(draw, (W - 570, 1040), away.upper(), _fit(draw, away.upper(), 780, 76, 36))
-        _text(draw, (W // 2, 1040), "VS", _font(72), GOLD)
+        fixture_crests = (crest_paths or {}).get(str(fixture.get("fixture_id")), {})
+        if require_crests and set(fixture_crests) != {"home", "away"}:
+            raise RuntimeError(f"both official crests are required for {fixture.get('fixture_id')}")
+        for side, center_x in (("home", 570), ("away", W - 570)):
+            crest_path = fixture_crests.get(side)
+            if crest_path:
+                box = _crest_disc(layer, crest_path, (center_x, 1000), 125)
+                crest_placements.append({"side": side, "source": str(crest_path), "box": box})
+        home_face = _fit(draw, home.upper(), 780, 76, 36)
+        away_face = _fit(draw, away.upper(), 780, 76, 36)
+        _text(draw, (570, 1270), home.upper(), home_face)
+        _text(draw, (W - 570, 1270), away.upper(), away_face)
+        _text(draw, (W // 2, 1000), "VS", _font(72), GOLD)
+        text_boxes.extend([
+            _text_box(draw, (570, 1270), home.upper(), home_face),
+            _text_box(draw, (W - 570, 1270), away.upper(), away_face),
+        ])
         prediction = predictions.get(str(fixture.get("fixture_id")), {})
         panel = (180, 1510, W - 180, 2440)
         draw.rounded_rectangle(panel, radius=34, fill=(0, 7, 16, 215), outline=GOLD, width=5)
@@ -208,10 +311,24 @@ def compose_poster(
             draw.rounded_rectangle((70, y0 + 8, W - 70, y0 + row_h - 8), radius=22, fill=(0, 7, 16, 190), outline=(255, 255, 255, 75), width=2)
             _text(draw, (190, yc - 30), str(fixture.get("kickoff_at_brt", "")), _font(54), GOLD)
             home, away = str(fixture["home_team"]), str(fixture["away_team"])
-            _text(draw, (760, yc - 28), home, _fit(draw, home, 660, 46, 24))
-            _text(draw, (1080, yc - 28), "VS", _font(34), GOLD)
-            _text(draw, (1400, yc - 28), away, _fit(draw, away, 600, 46, 24))
-            placements.extend(_paste_channels(layer, list(fixture.get("channels") or []), channels_root, (1700, yc + 60), 450, 74))
+            fixture_crests = (crest_paths or {}).get(str(fixture.get("fixture_id")), {})
+            if require_crests and set(fixture_crests) != {"home", "away"}:
+                raise RuntimeError(f"both official crests are required for {fixture.get('fixture_id')}")
+            for side, center_x in (("home", 400), ("away", W - 260)):
+                crest_path = fixture_crests.get(side)
+                if crest_path:
+                    box = _crest_disc(layer, crest_path, (center_x, yc - 26), 58)
+                    crest_placements.append({"side": side, "source": str(crest_path), "box": box})
+            home_face = _fit(draw, home, 430, 46, 24)
+            away_face = _fit(draw, away, 400, 46, 24)
+            _text(draw, (740, yc - 30), home, home_face)
+            _text(draw, (1040, yc - 30), "VS", _font(34), GOLD)
+            _text(draw, (1380, yc - 30), away, away_face)
+            text_boxes.extend([
+                _text_box(draw, (740, yc - 30), home, home_face),
+                _text_box(draw, (1380, yc - 30), away, away_face),
+            ])
+            placements.extend(_paste_channels(layer, list(fixture.get("channels") or []), channels_root, (W // 2, yc + 70), 450, 74))
         content_boxes = [[70, top, W - 70, bottom], [*logo_xy, logo_xy[0] + logo.width, logo_xy[1] + logo.height]]
 
     foreground_output.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +336,11 @@ def compose_poster(
     base.alpha_composite(layer)
     output.parent.mkdir(parents=True, exist_ok=True)
     base.convert("RGB").save(output, "PNG", optimize=True)
-    checked_boxes = [*content_boxes, *(item["box"] for item in placements)]
+    checked_boxes = [*content_boxes, *text_boxes, *(item["box"] for item in placements), *(item["box"] for item in crest_placements)]
+    crest_clearance = all(
+        _separate(crest["box"], text_box, 42)
+        for crest in crest_placements for text_box in text_boxes
+    )
     return {
         "canvas": [W, H],
         "background": str(background),
@@ -228,6 +349,12 @@ def compose_poster(
         "logo_sha256": hashlib.sha256(logo_path.read_bytes()).hexdigest(),
         "logo_box": content_boxes[-1],
         "channel_icons": placements,
+        "crests": crest_placements,
+        "required_crest_count": 2 if kind == "single" else len(fixtures) * 2,
+        "crest_policy": "required" if require_crests else "not_required_dry_run",
+        "player_head_exclusion_zone": [0, 620, W, 1450],
+        "team_name_boxes": text_boxes,
+        "crest_text_clearance": crest_clearance,
         "content_boxes": content_boxes,
         "all_content_in_bounds": all(0 <= box[0] < box[2] <= W and 0 <= box[1] < box[3] <= H for box in checked_boxes),
     }

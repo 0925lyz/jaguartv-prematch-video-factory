@@ -22,6 +22,8 @@ class Fixture:
     league_season: int | None = None
     home_team_id: int | None = None
     away_team_id: int | None = None
+    home_crest_url: str = ""
+    away_crest_url: str = ""
     verified_brazilian_players: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict, compare=False)
 
