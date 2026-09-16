@@ -22,7 +22,7 @@ from .media_inventory import (
     inventory_fingerprint,
     reserve_rotation,
 )
-from .poster import compose_poster, prepare_background
+from .poster import compose_poster, ensure_crest, prepare_background
 from .selection import select_fixtures
 from .upload import upload_pending_review
 from .video import (
@@ -209,6 +209,17 @@ def run_phase3(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
 
     tasks = [_single_prompt_task(item, run_dir) for item in fixtures]
     tasks.extend(_schedule_prompt_tasks(fixtures))
+    crest_dir = phase_dir / "crests"
+    crest_map: dict[str, dict[str, Path | None]] = {}
+    if not dry_run:
+        for item in fixtures:
+            raw = item.get("raw") or {}
+            entry: dict[str, Path | None] = {"home": None, "away": None}
+            for side, key in (("home", "homeLogo"), ("away", "awayLogo")):
+                url = str(raw.get(key) or "").strip()
+                if url:
+                    entry[side] = ensure_crest(url, crest_dir / f"{_task_id(item)}-{side}.png")
+            crest_map[_task_id(item)] = entry
     items = []
     for task in tasks:
         prompt_path = phase_dir / "prompts" / f"{task['id']}.txt"
@@ -233,6 +244,7 @@ def run_phase3(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
             predictions={_task_id(item): _prediction_block(item, run_dir) for item in task_fixtures},
             logo_path=ROOT / "assets/brand/jaguartv-logo.png",
             channels_root=ROOT / "assets/channels",
+            crest_paths=crest_map.get(str(task["id"])) if task["kind"] == "single" else None,
         )
         items.append({
             "task_id": task["id"],

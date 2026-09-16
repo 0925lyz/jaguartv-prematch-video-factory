@@ -76,7 +76,7 @@ from jaguartv_prematch.pipeline import (  # noqa: E402
     _yyMMdd,
     _zh,
 )
-from jaguartv_prematch.poster import compose_poster, prepare_background  # noqa: E402
+from jaguartv_prematch.poster import compose_poster, ensure_crest, prepare_background  # noqa: E402
 from jaguartv_prematch.upload import UploadError, upload_pending_review  # noqa: E402
 from jaguartv_prematch.video import (  # noqa: E402
     compose_v7,
@@ -409,6 +409,18 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
         except Exception:
             existing_items = {}
 
+    crest_map: dict[str, dict[str, Path | None]] = {}
+    crest_dir = phase_dir / "crests"
+    for fx in fixtures:
+        entry: dict[str, Path | None] = {"home": None, "away": None}
+        raw = fx.get("raw") or {}
+        if not dry_run:
+            for side, key in (("home", "homeLogo"), ("away", "awayLogo")):
+                url = str(raw.get(key) or "").strip()
+                if url:
+                    entry[side] = ensure_crest(url, crest_dir / f"{_task_id(fx)}-{side}.png")
+        crest_map[_task_id(fx)] = entry
+
     items = []
     total = len(tasks)
     for index, task in enumerate(tasks, 1):
@@ -440,6 +452,7 @@ def _phase3(config, run_dir: Path, style: str, style_scene: str, dry_run: bool) 
             fixtures=task_fixtures, predictions=predictions,
             logo_path=REPO_ROOT / "assets" / "brand" / "jaguartv-logo.png",
             channels_root=REPO_ROOT / "assets" / "channels",
+            crest_paths=crest_map.get(str(task["id"])) if task["kind"] == "single" else None,
         )
         items.append({
             "task_id": task["id"], "kind": task["kind"], "prompt": str(prompt_path),

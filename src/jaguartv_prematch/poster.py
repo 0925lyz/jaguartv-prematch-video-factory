@@ -111,6 +111,42 @@ def _transparent_icon(path: Path, size: tuple[int, int]) -> Image.Image:
     return image
 
 
+def _crest_image(path: Path, size: tuple[int, int]) -> Image.Image:
+    image = ImageOps.exif_transpose(Image.open(path)).convert("RGBA")
+    bbox = image.getbbox()
+    if bbox:
+        image = image.crop(bbox)
+    scale = min(size[0] / max(1, image.width), size[1] / max(1, image.height))
+    if scale != 1:
+        image = image.resize(
+            (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+    return image
+
+
+def ensure_crest(url: str, path: Path) -> Path:
+    """Download a team crest once; resume-friendly and fail-hard per production safety."""
+    import time
+
+    import requests
+
+    if path.is_file() and path.stat().st_size > 0:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            path.write_bytes(response.content)
+            return path
+        except Exception as error:  # noqa: BLE001 - retried below, then raised
+            last_error = error
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"crest download failed for {url}: {last_error}")
+
+
 def _channel_paths(labels: list[str], root: Path) -> list[Path]:
     paths: list[Path] = []
     for label in labels:
@@ -161,6 +197,7 @@ def compose_poster(
     background: Path, output: Path, foreground_output: Path, *, kind: str,
     fixtures: list[dict[str, Any]], predictions: dict[str, dict[str, str]],
     logo_path: Path, channels_root: Path,
+    crest_paths: dict[str, Path | None] | None = None,
 ) -> dict[str, Any]:
     base = Image.open(background).convert("RGBA")
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -169,6 +206,7 @@ def compose_poster(
     logo_xy = (W - logo.width - 54, 42)
     layer.alpha_composite(logo, logo_xy)
     placements: list[dict[str, Any]] = []
+    crest_boxes: list[dict[str, Any]] = []
 
     if kind == "single":
         fixture = fixtures[0]
@@ -180,9 +218,22 @@ def compose_poster(
         _text(draw, (W // 2, 500), str(fixture.get("kickoff_at_brt", "")), _font(112))
         _text(draw, (W // 2, 580), "HORÁRIO DE BRASÍLIA", _font(34), GOLD)
         placements = _paste_channels(layer, list(fixture.get("channels") or []), channels_root, (W // 2, 700), 1100, 120)
-        _text(draw, (570, 1040), home.upper(), _fit(draw, home.upper(), 780, 76, 36))
-        _text(draw, (W - 570, 1040), away.upper(), _fit(draw, away.upper(), 780, 76, 36))
-        _text(draw, (W // 2, 1040), "VS", _font(72), GOLD)
+        crest_sources = crest_paths or {}
+        for side, center_x in (("home", 570), ("away", W - 570)):
+            crest_file = crest_sources.get(side)
+            if not crest_file:
+                continue
+            crest = _crest_image(Path(crest_file), (260, 260))
+            crest_xy = (center_x - crest.width // 2, 940 - crest.height // 2)
+            layer.alpha_composite(crest, crest_xy)
+            crest_boxes.append({
+                "side": side,
+                "source": str(crest_file),
+                "box": [crest_xy[0], crest_xy[1], crest_xy[0] + crest.width, crest_xy[1] + crest.height],
+            })
+        _text(draw, (570, 1160), home.upper(), _fit(draw, home.upper(), 780, 76, 36))
+        _text(draw, (W - 570, 1160), away.upper(), _fit(draw, away.upper(), 780, 76, 36))
+        _text(draw, (W // 2, 1160), "VS", _font(72), GOLD)
         prediction = predictions.get(str(fixture.get("fixture_id")), {})
         panel = (180, 1510, W - 180, 2440)
         draw.rounded_rectangle(panel, radius=34, fill=(0, 7, 16, 215), outline=GOLD, width=5)
@@ -219,7 +270,7 @@ def compose_poster(
     base.alpha_composite(layer)
     output.parent.mkdir(parents=True, exist_ok=True)
     base.convert("RGB").save(output, "PNG", optimize=True)
-    checked_boxes = [*content_boxes, *(item["box"] for item in placements)]
+    checked_boxes = [*content_boxes, *(item["box"] for item in placements), *(box["box"] for box in crest_boxes)]
     return {
         "canvas": [W, H],
         "background": str(background),
@@ -228,6 +279,7 @@ def compose_poster(
         "logo_sha256": hashlib.sha256(logo_path.read_bytes()).hexdigest(),
         "logo_box": content_boxes[-1],
         "channel_icons": placements,
+        "crests": crest_boxes,
         "content_boxes": content_boxes,
         "all_content_in_bounds": all(0 <= box[0] < box[2] <= W and 0 <= box[1] < box[3] <= H for box in checked_boxes),
     }
