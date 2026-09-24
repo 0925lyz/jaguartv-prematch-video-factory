@@ -24,50 +24,63 @@ _STAGE_WORDS = {"group", "league", "stage", "fase", "qualification", "round", "r
 
 # National-team competition families. The upstream agenda feed carries neither a stable
 # league id nor a country for these rows (league_id is always null, league_country is empty),
-# so the competition name is the only usable signal. Matching stays on the family prefix plus a
-# numeric or stage suffix so that neighbouring club families cannot leak in: "UEFA Europa League"
-# must not match the "uefa euro" family, and "FIFA Club World Cup" is rejected outright.
-NATIONAL_TEAM_COMPETITIONS = {
-    "uefa nations league",
-    "concacaf nations league",
-    "conmebol nations league",
-    "uefa euro",
-    "euro championship",
-    "european championship",
-    "conmebol copa america",
-    "copa america",
-    "fifa world cup",
+# so the competition name is the only usable signal. Families are matched as whole phrases on
+# token boundaries so a confederation prefix or a round suffix cannot break the match
+# ("CONMEBOL World Cup Qualification", "WC Qualification South America") while neighbouring club
+# families stay out: "UEFA Europa League" has the token "europa", never "euro".
+NATIONAL_TEAM_COMPETITIONS = (
+    "nations league",
+    "nations cup",
     "world cup",
     "wc qualification",
-    "world cup qualification",
-    "concacaf gold cup",
+    "euro",
+    "european championship",
+    "copa america",
     "gold cup",
-    "afc asian cup",
-    "africa cup of nations",
-    "caf africa cup of nations",
-    "international friendlies",
+    "asian cup",
+    "cup of nations",
+    "confederations cup",
+    "arab cup",
+    "gulf cup",
     "friendlies",
+)
+
+# Only senior men's national teams are in scope. Women's and age-group competitions carry the
+# same family words ("UEFA Women's Nations League", "World Cup - U20"), so they are excluded by
+# an explicit guard rather than by accident of spelling.
+_NON_MEN_TEAM_TOKENS = {
+    "women", "womens", "woman", "womans", "ladies", "feminine", "feminino", "femenina",
+    "femenino", "youth", "junior", "juniors",
 }
 
-# A national-team fixture is published only when a Brazilian outlet actually carries it;
-# YouTube-only rows are free-to-air filler and stay out of the paid slate. Set to False to
-# publish every national-team match regardless of broadcaster.
-REQUIRE_BRAZILIAN_BROADCAST_FOR_NATIONAL_TEAMS = True
+# Concacaf spells its women's editions with a single-letter prefix, which no token guard catches.
+_NON_MEN_TEAM_PHRASES = ("w gold cup", "w championship", "w nations league")
+
+# The feed's channel column is the only broadcast signal. Kept as a switch so the paid slate can
+# be narrowed back to Brazilian outlets if the operator ever wants that again.
+REQUIRE_BRAZILIAN_BROADCAST_FOR_NATIONAL_TEAMS = False
 _NON_BROADCAST_CHANNELS = {"youtube"}
+
+
+def _is_senior_men_competition(normalized: str) -> bool:
+    tokens = normalized.split()
+    if _NON_MEN_TEAM_TOKENS.intersection(tokens):
+        return False
+    padded = f" {normalized} "
+    if any(f" {phrase} " in padded for phrase in _NON_MEN_TEAM_PHRASES):
+        return False
+    # Age-group teams show up as a u15..u23 token, with or without a separating "-".
+    return not any(token.startswith("u") and token[1:].isdigit() for token in tokens)
 
 
 def _national_team_competition(competition: str) -> bool:
     normalized = normalize_name(competition)
     if not normalized or "club" in normalized.split():
         return False
-    for alias in NATIONAL_TEAM_COMPETITIONS:
-        if normalized == alias:
-            return True
-        if normalized.startswith(alias + " "):
-            suffix = normalized[len(alias):].strip().split()
-            if suffix and (suffix[0].isdigit() or suffix[0] in _STAGE_WORDS):
-                return True
-    return False
+    if not _is_senior_men_competition(normalized):
+        return False
+    padded = f" {normalized} "
+    return any(f" {alias} " in padded for alias in NATIONAL_TEAM_COMPETITIONS)
 
 
 def _has_brazilian_broadcast(fixture: Fixture) -> bool:

@@ -168,7 +168,7 @@ def test_unrelated_competitions_still_fall_through():
     assert selection_reason(fixture(competition="2. Bundesliga - Regular Season - 5")) is None
 
 
-def test_national_team_competitions_are_selected_when_brazilian_outlets_carry_them():
+def test_senior_men_national_team_competitions_are_selected_for_any_country():
     assert selection_reason(
         fixture(competition="UEFA Nations League - League A - 1", home_team="Netherlands", away_team="Germany",
                 channels=("ESPN", "DISNEY+"))
@@ -180,6 +180,12 @@ def test_national_team_competitions_are_selected_when_brazilian_outlets_carry_th
         fixture(competition="World Cup - Qualification South America", channels=("GLOBO",))
     ) == "national_team_competition"
     assert selection_reason(
+        fixture(competition="CONMEBOL World Cup Qualification - Group A", channels=("GLOBO",))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="WC Qualification Europe - Group B", channels=("ESPN",))
+    ) == "national_team_competition"
+    assert selection_reason(
         fixture(competition="UEFA Euro 2028 - Qualifying", channels=("SPORTV",))
     ) == "national_team_competition"
     assert selection_reason(
@@ -188,36 +194,58 @@ def test_national_team_competitions_are_selected_when_brazilian_outlets_carry_th
     assert selection_reason(
         fixture(competition="CONMEBOL Copa America - Group A", channels=("PREMIERE",))
     ) == "national_team_competition"
-    assert selection_reason(
-        fixture(competition="Friendlies - 1", channels=("ESPN",))
-    ) == "national_team_competition"
-    assert selection_reason(
-        fixture(competition="Friendlies", channels=("ESPN",))
-    ) == "national_team_competition"
+    assert selection_reason(fixture(competition="Friendlies", channels=("ESPN",))) == "national_team_competition"
     assert selection_reason(
         fixture(competition="Africa Cup of Nations - Group A", channels=("BAND",))
     ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="AFC Asian Cup - Group C", channels=("ESPN",))
+    ) == "national_team_competition"
 
 
-def test_youtube_only_national_team_fixture_is_not_part_of_the_paid_slate():
+def test_national_team_fixture_is_selected_regardless_of_broadcaster():
+    # Only senior men's national teams are in scope; the broadcast column is not a filter.
     assert selection_reason(
         fixture(competition="CONCACAF Nations League - League B - 1", channels=("YOUTUBE",))
-    ) is None
+    ) == "national_team_competition"
     assert selection_reason(
         fixture(competition="UEFA Nations League - League D - 1", channels=("youtube",))
-    ) is None
-    # One real broadcaster is enough, even next to a free stream.
+    ) == "national_team_competition"
     assert selection_reason(
         fixture(competition="UEFA Nations League - League D - 1", channels=("YOUTUBE", "ESPN 4", "DISNEY+"))
     ) == "national_team_competition"
 
 
+def test_womens_and_age_group_national_teams_are_out_of_scope():
+    assert selection_reason(
+        fixture(competition="UEFA Women's Nations League - League A - 1", channels=("ESPN",))
+    ) is None
+    assert selection_reason(
+        fixture(competition="CONCACAF W Gold Cup - Group A", channels=("ESPN",))
+    ) is None
+    assert selection_reason(
+        fixture(competition="Copa America Femenina - Group A", channels=("ESPN",))
+    ) is None
+    assert selection_reason(
+        fixture(competition="World Cup - U20 - Group A", channels=("ESPN",))
+    ) is None
+    assert selection_reason(
+        fixture(competition="UEFA U21 Championship - Group B", channels=("SPORTV",))
+    ) is None
+    assert selection_reason(
+        fixture(competition="Euro U19 - Qualifying", channels=("ESPN",))
+    ) is None
+
+
 def test_national_team_family_matching_does_not_leak_into_club_competitions():
-    # "UEFA Europa League" starts with the letters of "uefa euro" but is a club family.
+    # "UEFA Europa League" carries the token "europa", never "euro".
     assert selection_reason(fixture(competition="UEFA Europa League - League Stage - 1")) is None
     assert selection_reason(fixture(competition="FIFA Club World Cup - Group A")) is None
     assert selection_reason(fixture(competition="CONCACAF Champions Cup - Round of 16")) is None
     assert selection_reason(fixture(competition="Liga Pro Serie B - Promotion Group - 5")) is None
+    # The pre-existing club rules must be untouched by the national-team family.
+    assert selection_reason(fixture(competition="CONMEBOL Sudamericana - Group Stage")) == "target_competition"
+    assert selection_reason(fixture(competition="CONMEBOL Libertadores - Quarter-finals")) == "target_competition"
 
 
 def test_national_team_fixture_still_requires_the_featured_editorial_flag():
