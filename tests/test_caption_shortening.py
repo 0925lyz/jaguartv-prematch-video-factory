@@ -11,7 +11,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-from jaguartv_prematch.pipeline import _short_text
+from jaguartv_prematch.pipeline import _captions, _short_text
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -108,3 +108,51 @@ def test_caption_keeps_a_complete_first_sentence_verbatim(tmp_path):
     captions = driver._captions_for_batch(run_dir, [{"task_id": "fx-1", "kind": "single"}], 1)
     description = captions["items"][0]["description"]
     assert "Holanda deve ter a posse e atacar pelas laterais." in description
+
+
+# --- clause-aware trimming ---------------------------------------------------------
+# Trimming at a bare word boundary still produced fragments that end on a preposition,
+# article or conjunction ("...apostando nas...", "...lançando Isidor e..."), which reads
+# as broken Portuguese to a Brazilian reader. The trim must land on a clause break.
+
+TACTICAL = (
+    "Andorra deve alinhar num 4-4-2 compacto e recuado, defendendo baixo e apostando "
+    "nas transições. Malta joga em 4-3-3, com Teuma a organizar e Cardona como "
+    "referência, mas tem pouco volume ofensivo fora de casa."
+)
+
+DANGLING = (" e", " ou", " de", " do", " da", " em", " no", " na", " nas", " nos",
+            " com", " sem", " para", " por", " um", " uma", " que", " ao", " à")
+
+
+def test_short_text_trims_at_a_clause_break_not_a_dangling_word():
+    trimmed = _short_text(TACTICAL, 90)
+    assert trimmed == "Andorra deve alinhar num 4-4-2 compacto e recuado..."
+    assert not trimmed[:-3].lower().endswith(DANGLING)
+
+
+def test_short_text_never_leaves_an_unclosed_parenthesis():
+    value = (
+        "Curaçao de Advocaat aposta em bloco baixo com cinco defensores (Brenet, "
+        "Obispo, Floranus) e saída em velocidade por Chong e Juninho Bacuna."
+    )
+    trimmed = _short_text(value, 90)
+    assert trimmed.count("(") == trimmed.count(")")
+    assert "Brenet" not in trimmed
+    assert trimmed.endswith("...")
+
+
+def test_short_text_never_exceeds_the_budget():
+    for limit in (40, 60, 90, 100):
+        for value in (TACTICAL, TACTICAL.replace(",", " "), "palavra " * 60):
+            assert len(_short_text(value, limit)) <= limit
+
+
+def test_package_caption_does_not_end_a_trimmed_line_with_a_fake_period(tmp_path):
+    run_dir = _run_dir(tmp_path, TACTICAL)
+    captions = _captions(run_dir, [{"task_id": "fx-1", "kind": "single"}])
+    description = captions["items"][0]["description"]
+    # The trimmed quote must stay visibly trimmed instead of posing as a finished sentence.
+    assert "Andorra deve alinhar num 4-4-2 compacto e recuado..." in description
+    assert "apostando nas." not in description
+    assert "recuado. " not in description

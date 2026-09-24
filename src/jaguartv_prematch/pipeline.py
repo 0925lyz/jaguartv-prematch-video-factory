@@ -583,10 +583,12 @@ def _caption_for(run_dir: Path, item: dict[str, Any], fixtures: list[dict[str, A
     score_only = _score_only(score)
     prediction = f"{home} {score_only} {away}" if score_only else score
     tactical_copy = _short_text(tactical, 90)
+    if tactical_copy and not tactical_copy.endswith((".", "!", "?", "…")):
+        tactical_copy += "."
     body = (
         f"🔥 Jogaço hoje: {home} x {away}, às {fx.get('kickoff_at_brt')}, pela {competition}. "
         f"Meu palpite: {prediction}."
-        f"{(' ' + tactical_copy.rstrip('.') + '.') if tactical_copy else ''} "
+        f"{(' ' + tactical_copy) if tactical_copy else ''} "
         "Quer acompanhar? Jaguar TV no Android e TV Box."
     )
     return {
@@ -652,22 +654,38 @@ def _score_only(score: str) -> str:
     return f"{found.group(1)} x {found.group(2)}" if found else ""
 
 
+_SENTENCE_BREAKS = (". ", "! ", "? ")
+_CLAUSE_BREAKS = (", ", "; ", ": ")
+
+
+def _drop_open_bracket(prefix: str) -> str:
+    """Drop back before an unclosed "(" so a trimmed quote never leaves it hanging."""
+    if prefix.count("(") > prefix.count(")"):
+        return prefix[: prefix.rfind("(")].rstrip()
+    return prefix
+
+
 def _short_text(value: str, limit: int) -> str:
-    """Shorten to ``limit`` characters, preferring to end on a complete sentence.
+    """Shorten to ``limit`` characters, preferring to end on a readable break.
 
     A caption embeds the shortened text inside a longer sentence, so a cut landing
     in the middle of a clause reads as a typo ("...defendendo baixo e apostando
-    nas."). When the budget already covers a whole sentence, cut there and keep its
-    punctuation; otherwise fall back to a word-boundary ellipsis so the reader can
-    still see that the quote was trimmed.
+    nas."). Preference order: a whole sentence inside the budget, then the last clause
+    break that still fills at least half (or a third) of the budget, then a plain
+    word-boundary ellipsis so the reader can still see that the quote was trimmed.
+    The result never exceeds ``limit``.
     """
     value = " ".join(str(value).split())
     if len(value) <= limit:
         return value
     window = value[:limit]
-    boundary = max((window.rfind(mark) for mark in (". ", "! ", "? ")), default=-1)
+    boundary = max((window.rfind(mark) for mark in _SENTENCE_BREAKS), default=-1)
     if boundary >= limit // 2:
         return window[: boundary + 1]
+    for floor in (limit // 2, limit // 3):
+        clause = max((window.rfind(mark) for mark in _CLAUSE_BREAKS), default=-1)
+        if clause >= floor:
+            return f"{_drop_open_bracket(window[:clause]).rstrip('.,;:!?')}..."
     shortened = value[: limit - 3].rsplit(" ", 1)[0].rstrip(".,:;!?")
     return f"{shortened or value[:limit - 3]}..."
 
