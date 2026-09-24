@@ -653,9 +653,21 @@ def _score_only(score: str) -> str:
 
 
 def _short_text(value: str, limit: int) -> str:
+    """Shorten to ``limit`` characters, preferring to end on a complete sentence.
+
+    A caption embeds the shortened text inside a longer sentence, so a cut landing
+    in the middle of a clause reads as a typo ("...defendendo baixo e apostando
+    nas."). When the budget already covers a whole sentence, cut there and keep its
+    punctuation; otherwise fall back to a word-boundary ellipsis so the reader can
+    still see that the quote was trimmed.
+    """
     value = " ".join(str(value).split())
     if len(value) <= limit:
         return value
+    window = value[:limit]
+    boundary = max((window.rfind(mark) for mark in (". ", "! ", "? ")), default=-1)
+    if boundary >= limit // 2:
+        return window[: boundary + 1]
     shortened = value[: limit - 3].rsplit(" ", 1)[0].rstrip(".,:;!?")
     return f"{shortened or value[:limit - 3]}..."
 

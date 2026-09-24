@@ -742,7 +742,7 @@ def _captions_for_batch(run_dir: Path, items: list[dict], batch: int) -> dict:
             kickoff=fx.get("kickoff_at_brt"),
             competition=competition,
             prediction=prediction,
-            tactical=f" {tactical.rstrip('.')}." if tactical else "",
+            tactical=f" {tactical if tactical.endswith(('.', '!', '?', '…')) else tactical + '.'}" if tactical else "",
         ).replace("  ", " ").strip()
         out_items.append({"task_id": task_id, "title": _prematch_title(home, away, score_only),
                           "description": _tiktok_caption(body, hashtags), "hashtags": hashtags})
