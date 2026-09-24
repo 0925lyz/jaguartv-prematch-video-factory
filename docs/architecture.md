@@ -10,6 +10,9 @@ not modify or vendor the separate video-creation-automation repository.
 2. `selection.py` identifies API-Football competitions by stable league ID, then controlled
    normalized aliases. Current-season Brasileirão Série A membership comes from API-Football
    league/team relations; any fixture with one member club qualifies regardless of competition.
+   National-team competition families qualify by competition name instead, since the agenda feed
+   carries no league ID or country for them; those fixtures additionally require a Brazilian
+   broadcaster (see `REQUIRE_BRAZILIAN_BROADCAST_FOR_NATIONAL_TEAMS`).
 3. Research records must retain URL, platform, timestamps, excerpt, normalized summary, and
    confidence before poster generation begins.
 4. Prompt generation uses the current task model unless an available provider/model is explicitly configured. Image generation is a separate

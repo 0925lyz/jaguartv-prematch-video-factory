@@ -168,6 +168,64 @@ def test_unrelated_competitions_still_fall_through():
     assert selection_reason(fixture(competition="2. Bundesliga - Regular Season - 5")) is None
 
 
+def test_national_team_competitions_are_selected_when_brazilian_outlets_carry_them():
+    assert selection_reason(
+        fixture(competition="UEFA Nations League - League A - 1", home_team="Netherlands", away_team="Germany",
+                channels=("ESPN", "DISNEY+"))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="CONCACAF Nations League - League A - 1", channels=("SPORTV 2",))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="World Cup - Qualification South America", channels=("GLOBO",))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="UEFA Euro 2028 - Qualifying", channels=("SPORTV",))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="Euro Championship - Qualification", channels=("ESPN",))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="CONMEBOL Copa America - Group A", channels=("PREMIERE",))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="Friendlies - 1", channels=("ESPN",))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="Friendlies", channels=("ESPN",))
+    ) == "national_team_competition"
+    assert selection_reason(
+        fixture(competition="Africa Cup of Nations - Group A", channels=("BAND",))
+    ) == "national_team_competition"
+
+
+def test_youtube_only_national_team_fixture_is_not_part_of_the_paid_slate():
+    assert selection_reason(
+        fixture(competition="CONCACAF Nations League - League B - 1", channels=("YOUTUBE",))
+    ) is None
+    assert selection_reason(
+        fixture(competition="UEFA Nations League - League D - 1", channels=("youtube",))
+    ) is None
+    # One real broadcaster is enough, even next to a free stream.
+    assert selection_reason(
+        fixture(competition="UEFA Nations League - League D - 1", channels=("YOUTUBE", "ESPN 4", "DISNEY+"))
+    ) == "national_team_competition"
+
+
+def test_national_team_family_matching_does_not_leak_into_club_competitions():
+    # "UEFA Europa League" starts with the letters of "uefa euro" but is a club family.
+    assert selection_reason(fixture(competition="UEFA Europa League - League Stage - 1")) is None
+    assert selection_reason(fixture(competition="FIFA Club World Cup - Group A")) is None
+    assert selection_reason(fixture(competition="CONCACAF Champions Cup - Round of 16")) is None
+    assert selection_reason(fixture(competition="Liga Pro Serie B - Promotion Group - 5")) is None
+
+
+def test_national_team_fixture_still_requires_the_featured_editorial_flag():
+    assert selection_reason(
+        fixture(competition="UEFA Nations League - League A - 1", featured=False, channels=())
+    ) is None
+
+
 def test_non_featured_match_is_rejected():
     assert selection_reason(fixture(featured=False, home_team="Manchester City")) is None
 
