@@ -20,12 +20,28 @@ def is_transient_apimart_error(error: Exception) -> bool:
         "credential", "api key", "unauthorized", "forbidden", "http 400", "http 401",
         "http 403", "http 404", "http 422", "invalid", "unsupported", "exceeds 20mb",
         "content safety", "内容安全", "asset is missing",
+        # A TLS trust failure will never heal by retrying, so keep it away from the
+        # ssl/eof markers below.
+        "certificate verify", "certificate_verify_failed", "self-signed certificate",
+        "hostname mismatch", "certificate has expired",
     )
     if any(marker in message for marker in permanent):
         return False
     return bool(
         re.search(r"http (?:408|409|425|429|5\d\d)\b", message)
-        or any(marker in message for marker in ("timeout", "timed out", "rate limit", "temporar", "unavailable", "connection", "fetch failed", "task failed", "cancelled", "downloaded video is too small"))
+        or any(marker in message for marker in (
+            "timeout", "timed out", "rate limit", "temporar", "unavailable", "connection",
+            "fetch failed", "task failed", "cancelled", "downloaded video is too small",
+            # Network-layer interruptions of the egress path (the local HTTP proxy can drop
+            # a node mid-flight). A TLS session cut in half, a reset, or a closed stream says
+            # nothing about the request itself, so it must be retried instead of being
+            # reported as a permanent provider rejection. Observed 2026-09-23: a proxy node
+            # blip surfaced as "<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF
+            # occurred in violation of protocol>" and aborted a whole production batch.
+            "ssl", "unexpected_eof", "eof occurred", "eof while reading", "reset by peer",
+            "connection reset", "connection aborted", "broken pipe", "remote end closed",
+            "econnreset", "epipe", "tlsv1 alert",
+        ))
     )
 
 
