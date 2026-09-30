@@ -39,6 +39,7 @@
     "model_id": "seedance2.0fast_vip",
     "resolution": "720p",
     "generation_seconds": 4,
+    "generated_motion": true,
     "dreamina_command": "dreamina",
     "fallback": {
       "provider_id": "apimart",

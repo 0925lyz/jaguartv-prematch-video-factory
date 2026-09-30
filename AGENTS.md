@@ -27,6 +27,10 @@ These rules apply to every task and automation in this repository.
   and record both provider attempts.
 - Select exactly half of each poster batch deterministically for background-only motion; odd batches
   drop one deterministic motion candidate. Every remaining poster uses a local static 4-second hook.
+  An operator may switch this off machine-locally with `video.generated_motion: false` in the local
+  config: no poster is then sent to a video model, every poster uses the local static 4-second hook,
+  and each record's `motion_selection.reason` becomes `generated_motion_disabled_by_operator`.
+  The default remains on.
 - Generate exactly the opening 4-second poster hook. Play each selected operation-class video
   and motion CTA in full; the final duration is their actual combined duration, not a fixed 12 seconds.
   Middle clips, CTA, music, and voiceover must come from existing authorized inventory.

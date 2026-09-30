@@ -56,26 +56,39 @@ def video_filenames(poster_path: str | Path, source_seconds: int = 4, sequence: 
     }
 
 
-def deterministic_motion_plan(task_ids: list[str], seed: str) -> dict[str, dict[str, Any]]:
+def deterministic_motion_plan(
+    task_ids: list[str], seed: str, allow_generated_motion: bool = True
+) -> dict[str, dict[str, Any]]:
+    """Deterministic half selection for background-only generated motion.
+
+    `allow_generated_motion=False` is an operator-level switch (`video.generated_motion`
+    in the local config): the ranking is still computed and reported, but no poster is
+    sent to a video model. Every poster then uses the local static 4-second hook and the
+    final video is assembled purely from repository inventory, so zero video-generation
+    credit is spent.
+    """
     ranked = sorted(set(task_ids), key=lambda task_id: hashlib.sha256(f"{seed}:{task_id}".encode()).hexdigest())
     dropped = ranked[-1] if len(ranked) % 2 else None
     candidates = ranked[:-1] if dropped else ranked
-    selected = set(candidates[: len(candidates) // 2])
-    return {
-        task_id: {
-            "dynamic": task_id in selected,
-            "video_model_called": task_id in selected,
+    selected = set(candidates[: len(candidates) // 2]) if allow_generated_motion else set()
+    plan: dict[str, dict[str, Any]] = {}
+    for task_id in task_ids:
+        dynamic = task_id in selected
+        if dynamic:
+            reason = "selected_deterministically_for_background_motion"
+        elif not allow_generated_motion:
+            reason = "generated_motion_disabled_by_operator"
+        elif task_id == dropped:
+            reason = "odd_batch_candidate_dropped_to_static"
+        else:
+            reason = "static_half_not_sent_to_video_model"
+        plan[task_id] = {
+            "dynamic": dynamic,
+            "video_model_called": dynamic,
             "rank": ranked.index(task_id) + 1,
-            "reason": (
-                "selected_deterministically_for_background_motion"
-                if task_id in selected
-                else "odd_batch_candidate_dropped_to_static"
-                if task_id == dropped
-                else "static_half_not_sent_to_video_model"
-            ),
+            "reason": reason,
         }
-        for task_id in task_ids
-    }
+    return plan
 
 
 def make_layered_master(

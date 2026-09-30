@@ -772,6 +772,21 @@ def test_motion_plan_is_reproducible_and_calls_video_for_exactly_half():
     assert sum(item["reason"] == "odd_batch_candidate_dropped_to_static" for item in odd.values()) == 1
 
 
+def test_motion_plan_operator_switch_disables_every_video_model_call():
+    ids = ["a", "b", "c", "d", "e"]
+    off = deterministic_motion_plan(ids, "2026-09-15", allow_generated_motion=False)
+    assert set(off) == set(ids)
+    assert all(item["video_model_called"] is False for item in off.values())
+    assert all(item["dynamic"] is False for item in off.values())
+    assert all(item["reason"] == "generated_motion_disabled_by_operator" for item in off.values())
+    # ranking stays deterministic and is still reported
+    default = deterministic_motion_plan(ids, "2026-09-15")
+    assert {k: v["rank"] for k, v in off.items()} == {k: v["rank"] for k, v in default.items()}
+    assert off == deterministic_motion_plan(ids, "2026-09-15", allow_generated_motion=False)
+    # the switch never changes the default (policy-preserving)
+    assert sum(item["video_model_called"] for item in default.values()) == 2
+
+
 def test_apimart_retry_persists_transient_failure_and_stops_on_auth(tmp_path):
     state = tmp_path / "retry.json"
     calls = []

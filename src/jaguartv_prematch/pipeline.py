@@ -269,7 +269,10 @@ def run_phase4(config: FactoryConfig, run_dir: Path, *, dry_run: bool = False) -
         for item in posters
     }
     discard_stale_pending(rotation_state, set(usage_ids.values()))
-    motion_plan = deterministic_motion_plan([item["task_id"] for item in posters], _run_date(run_dir))
+    motion_plan = deterministic_motion_plan(
+        [item["task_id"] for item in posters], _run_date(run_dir),
+        allow_generated_motion=bool(config.data["video"].get("generated_motion", True)),
+    )
     items = []
     for sequence, item in enumerate(posters, 1):
         usage_id = usage_ids[item["task_id"]]

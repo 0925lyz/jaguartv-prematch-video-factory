@@ -509,7 +509,10 @@ def _phase4(config, run_dir: Path, batch: int, date_seed: str, dry_run: bool) ->
         for item in posters
     }
     discard_stale_pending(rotation_state, set(usage_ids.values()))
-    motion_plan = deterministic_motion_plan([i["task_id"] for i in posters], date_seed)
+    motion_plan = deterministic_motion_plan(
+        [i["task_id"] for i in posters], date_seed,
+        allow_generated_motion=bool(config.data["video"].get("generated_motion", True)),
+    )
     resume_items = {str(i.get("task_id")): i for i in _load_phase4_resume_items(phase_dir)}
     items = []
     total = len(posters)
